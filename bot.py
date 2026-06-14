@@ -13,12 +13,9 @@ logging.basicConfig(
     level=logging.WARNING
 )
 
-# ذخیره اطلاعات کاربران و وضعیت بلاک
 users_db = {}
 blocked_users = set()
-reply_to = {}  # برای پاسخ به کاربر خاص
-
-# ==================== پنل ادمین ====================
+reply_to = {}
 
 def admin_panel_keyboard():
     keyboard = [
@@ -41,64 +38,37 @@ async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat_id = update.effective_chat.id
-
+    if update.effective_chat.type != "private":
+        return
     if chat_id == ADMIN_CHAT_ID:
         await panel(update, context)
         return
-
-    # ذخیره کاربر
     users_db[chat_id] = {
         "name": user.full_name,
         "username": user.username or "ندارد",
         "chat_id": chat_id
     }
-
-    await update.message.reply_text(
-        "👋 سلام!\nپیامت رو بفرست، در اولین فرصت جواب میگیری ✅"
-    )
-
-# ==================== دریافت پیام از کاربر ====================
+    await update.message.reply_text("👋 سلام!\nپیامت رو بفرست، در اولین فرصت جواب میگیری ✅")
 
 async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat_id = update.effective_chat.id
-
-    # پیام ادمین به کاربر
-    if chat_id == ADMIN_CHAT_ID:
-        if chat_id in reply_to:
-            target_id = reply_to[chat_id]
-            try:
-                await context.bot.send_message(
-                    chat_id=target_id,
-                    text=f"📨 پیام از ادمین:\n{update.message.text}"
-                )
-                await update.message.reply_text("✅ پیام ارسال شد!")
-                del reply_to[chat_id]
-            except Exception:
-                await update.message.reply_text("❌ ارسال پیام ناموفق بود.")
+    if update.effective_chat.type != "private":
         return
-
-    # بلاک چک
+    if chat_id == ADMIN_CHAT_ID:
+        return
     if chat_id in blocked_users:
         await update.message.reply_text("⛔ شما مسدود شده‌اید.")
         return
-
-    # ذخیره کاربر
     users_db[chat_id] = {
         "name": user.full_name,
         "username": user.username or "ندارد",
         "chat_id": chat_id
     }
-
-    # ارسال به ادمین
-    keyboard = [
-        [
-            InlineKeyboardButton("↩️ پاسخ", callback_data=f"reply_{chat_id}"),
-            InlineKeyboardButton("🚫 بلاک", callback_data=f"block_{chat_id}"),
-        ]
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-
+    keyboard = [[
+        InlineKeyboardButton("↩️ پاسخ", callback_data=f"reply_{chat_id}"),
+        InlineKeyboardButton("🚫 بلاک", callback_data=f"block_{chat_id}"),
+    ]]
     sender_info = (
         f"📩 *پیام جدید*\n"
         f"👤 نام: {user.full_name}\n"
@@ -106,58 +76,31 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔢 Chat ID: `{chat_id}`\n"
         f"{'─' * 25}"
     )
-
-    await context.bot.send_message(
-        chat_id=ADMIN_CHAT_ID,
-        text=sender_info,
-        parse_mode="Markdown",
-        reply_markup=markup
-    )
+    await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=sender_info, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
     await update.message.forward(chat_id=ADMIN_CHAT_ID)
     await update.message.reply_text("✅ پیامت دریافت شد، به زودی جواب میگیری.")
-
-# ==================== دکمه‌های اینلاین ====================
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
-
     if query.message.chat.id != ADMIN_CHAT_ID:
         return
-
-    # پاسخ به کاربر
     if data.startswith("reply_"):
         target_id = int(data.split("_")[1])
         reply_to[ADMIN_CHAT_ID] = target_id
         user_info = users_db.get(target_id, {})
-        await query.message.reply_text(
-            f"✍️ پیامت رو بنویس، برای *{user_info.get('name', target_id)}* ارسال میشه.\n"
-            f"(پیام بعدیت رو بفرست)",
-            parse_mode="Markdown"
-        )
-
-    # بلاک کاربر
+        await query.message.reply_text(f"✍️ پیامت رو بنویس، برای *{user_info.get('name', target_id)}* ارسال میشه.", parse_mode="Markdown")
     elif data.startswith("block_"):
         target_id = int(data.split("_")[1])
         blocked_users.add(target_id)
         user_info = users_db.get(target_id, {})
-        await query.message.reply_text(
-            f"🚫 کاربر *{user_info.get('name', target_id)}* بلاک شد.",
-            parse_mode="Markdown"
-        )
-
-    # آنبلاک کاربر
+        await query.message.reply_text(f"🚫 کاربر *{user_info.get('name', target_id)}* بلاک شد.", parse_mode="Markdown")
     elif data.startswith("unblock_"):
         target_id = int(data.split("_")[1])
         blocked_users.discard(target_id)
         user_info = users_db.get(target_id, {})
-        await query.message.reply_text(
-            f"✅ کاربر *{user_info.get('name', target_id)}* آنبلاک شد.",
-            parse_mode="Markdown"
-        )
-
-    # لیست کاربران
+        await query.message.reply_text(f"✅ کاربر *{user_info.get('name', target_id)}* آنبلاک شد.", parse_mode="Markdown")
     elif data == "list_users":
         if not users_db:
             await query.message.reply_text("👥 هنوز هیچ کاربری نداری.")
@@ -169,13 +112,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"{blocked} {info['name']} | @{info['username']} | `{uid}`\n"
             keyboard.append([
                 InlineKeyboardButton(f"↩️ پاسخ به {info['name']}", callback_data=f"reply_{uid}"),
-                InlineKeyboardButton("🚫 بلاک" if uid not in blocked_users else "✅ آنبلاک",
-                                     callback_data=f"{'block' if uid not in blocked_users else 'unblock'}_{uid}")
+                InlineKeyboardButton("🚫 بلاک" if uid not in blocked_users else "✅ آنبلاک", callback_data=f"{'block' if uid not in blocked_users else 'unblock'}_{uid}")
             ])
         keyboard.append([InlineKeyboardButton("🔙 برگشت", callback_data="back")])
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-
-    # لیست بلاک‌شده‌ها
     elif data == "list_blocked":
         if not blocked_users:
             await query.message.reply_text("🚫 هیچ کاربری بلاک نشده.")
@@ -185,49 +125,28 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for uid in blocked_users:
             info = users_db.get(uid, {"name": str(uid), "username": "ندارد"})
             text += f"🚫 {info['name']} | @{info['username']} | `{uid}`\n"
-            keyboard.append([
-                InlineKeyboardButton(f"✅ آنبلاک {info['name']}", callback_data=f"unblock_{uid}")
-            ])
+            keyboard.append([InlineKeyboardButton(f"✅ آنبلاک {info['name']}", callback_data=f"unblock_{uid}")])
         keyboard.append([InlineKeyboardButton("🔙 برگشت", callback_data="back")])
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-
-    # آمار
     elif data == "stats":
         total = len(users_db)
         blocked = len(blocked_users)
         active = total - blocked
-        text = (
-            f"📊 *آمار ربات*\n\n"
-            f"👥 کل کاربران: {total}\n"
-            f"✅ کاربران فعال: {active}\n"
-            f"🚫 بلاک‌شده‌ها: {blocked}\n"
-        )
-        await query.message.reply_text(text, parse_mode="Markdown",
-                                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 برگشت", callback_data="back")]]))
-
-    # پیام همگانی
+        text = f"📊 *آمار ربات*\n\n👥 کل کاربران: {total}\n✅ کاربران فعال: {active}\n🚫 بلاک‌شده‌ها: {blocked}\n"
+        await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 برگشت", callback_data="back")]]))
     elif data == "broadcast":
         reply_to[ADMIN_CHAT_ID] = "broadcast"
-        await query.message.reply_text(
-            "📢 پیام همگانیت رو بنویس، برای همه کاربران ارسال میشه:"
-        )
-
-    # برگشت به پنل
+        await query.message.reply_text("📢 پیام همگانیت رو بنویس، برای همه کاربران ارسال میشه:")
     elif data == "back":
-        await query.message.reply_text(
-            "🎛 *پنل مدیریت ربات*\nیه گزینه انتخاب کن:",
-            parse_mode="Markdown",
-            reply_markup=admin_panel_keyboard()
-        )
-
-# ==================== پیام همگانی ====================
+        await query.message.reply_text("🎛 *پنل مدیریت ربات*\nیه گزینه انتخاب کن:", parse_mode="Markdown", reply_markup=admin_panel_keyboard())
 
 async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+    if update.effective_chat.type != "private":
+        return
     if chat_id != ADMIN_CHAT_ID:
         await forward_message(update, context)
         return
-
     if reply_to.get(ADMIN_CHAT_ID) == "broadcast":
         del reply_to[ADMIN_CHAT_ID]
         success = 0
@@ -242,10 +161,7 @@ async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif ADMIN_CHAT_ID in reply_to:
         target_id = reply_to[ADMIN_CHAT_ID]
         try:
-            await context.bot.send_message(
-                chat_id=target_id,
-                text=f"📨 پیام از ادمین:\n{update.message.text}"
-            )
+            await context.bot.send_message(chat_id=target_id, text=f"📨 پیام از ادمین:\n{update.message.text}")
             await update.message.reply_text("✅ پیام ارسال شد!")
             del reply_to[ADMIN_CHAT_ID]
         except Exception:
