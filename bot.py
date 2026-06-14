@@ -16,8 +16,8 @@ logging.basicConfig(
 users_db = {}
 blocked_users = set()
 reply_to = {}
-message_map = {}
-group_mode = {}
+message_map = {}  # نگه‌داری message_id پیام اصلی برای ریپلای
+group_mode = {}   # حالت ارسال به گروه
 
 def admin_panel_keyboard():
     keyboard = [
@@ -79,14 +79,17 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔢 Chat ID: `{chat_id}`\n"
         f"{'─' * 25}"
     )
-    await context.bot.send_message(
+    info_msg = await context.bot.send_message(
         chat_id=ADMIN_CHAT_ID,
         text=sender_info,
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+    # فوروارد پیام و ذخیره message_id برای ریپلای
     fwd = await update.message.forward(chat_id=ADMIN_CHAT_ID)
+    # ذخیره: chat_id کاربر → message_id پیام فوروارد شده
     message_map[f"reply_{chat_id}"] = fwd.message_id
+
     await update.message.reply_text("✅ پیامت دریافت شد، به زودی جواب میگیری.")
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -95,6 +98,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     if query.message.chat.id != ADMIN_CHAT_ID:
         return
+
     if data.startswith("reply_"):
         target_id = int(data.split("_")[1])
         reply_to[ADMIN_CHAT_ID] = target_id
@@ -103,16 +107,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✍️ پیامت رو بنویس، برای *{user_info.get('name', target_id)}* ارسال میشه.",
             parse_mode="Markdown"
         )
+
     elif data.startswith("block_"):
         target_id = int(data.split("_")[1])
         blocked_users.add(target_id)
         user_info = users_db.get(target_id, {})
         await query.message.reply_text(f"🚫 کاربر *{user_info.get('name', target_id)}* بلاک شد.", parse_mode="Markdown")
+
     elif data.startswith("unblock_"):
         target_id = int(data.split("_")[1])
         blocked_users.discard(target_id)
         user_info = users_db.get(target_id, {})
         await query.message.reply_text(f"✅ کاربر *{user_info.get('name', target_id)}* آنبلاک شد.", parse_mode="Markdown")
+
     elif data == "list_users":
         if not users_db:
             await query.message.reply_text("👥 هنوز هیچ کاربری نداری.")
@@ -129,6 +136,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
         keyboard.append([InlineKeyboardButton("🔙 برگشت", callback_data="back")])
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+
     elif data == "list_blocked":
         if not blocked_users:
             await query.message.reply_text("🚫 هیچ کاربری بلاک نشده.")
@@ -141,6 +149,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard.append([InlineKeyboardButton(f"✅ آنبلاک {info['name']}", callback_data=f"unblock_{uid}")])
         keyboard.append([InlineKeyboardButton("🔙 برگشت", callback_data="back")])
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+
     elif data == "stats":
         total = len(users_db)
         blocked = len(blocked_users)
@@ -148,15 +157,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = f"📊 *آمار ربات*\n\n👥 کل کاربران: {total}\n✅ کاربران فعال: {active}\n🚫 بلاک‌شده‌ها: {blocked}\n"
         await query.message.reply_text(text, parse_mode="Markdown",
                                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 برگشت", callback_data="back")]]))
+
     elif data == "broadcast":
         reply_to[ADMIN_CHAT_ID] = "broadcast"
         await query.message.reply_text("📢 پیام همگانیت رو بنویس، برای همه کاربران ارسال میشه:")
+
     elif data == "send_group":
         group_mode[ADMIN_CHAT_ID] = "waiting_id"
         await query.message.reply_text(
-            "👥 *ارسال به گروه*\n\nاول آیدی عددی گروه رو بفرست:\n(مثلاً: `-1001234567890`)",
+            "👥 *ارسال به گروه*\n\nاول آیدی عددی گروه رو بفرست:\n(مثلاً: `-1001234567890`)\n\nبرای پیدا کردن آیدی گروه، ربات رو به گروه اضافه کن و یه پیام بفرست.",
             parse_mode="Markdown"
         )
+
     elif data == "back":
         await query.message.reply_text(
             "🎛 *پنل مدیریت ربات*\nیه گزینه انتخاب کن:",
@@ -171,15 +183,23 @@ async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id != ADMIN_CHAT_ID:
         await forward_message(update, context)
         return
+
     text = update.message.text
+
+    # حالت ارسال به گروه - دریافت آیدی گروه
     if group_mode.get(ADMIN_CHAT_ID) == "waiting_id":
         try:
             group_id = int(text.strip())
             group_mode[ADMIN_CHAT_ID] = group_id
-            await update.message.reply_text(f"✅ آیدی گروه ذخیره شد: `{group_id}`\n\nحالا پیامت رو بنویس:", parse_mode="Markdown")
+            await update.message.reply_text(
+                f"✅ آیدی گروه ذخیره شد: `{group_id}`\n\nحالا پیامی که میخوای بفرستی رو بنویس:",
+                parse_mode="Markdown"
+            )
         except ValueError:
             await update.message.reply_text("❌ آیدی اشتباهه! باید عدد باشه مثل `-1001234567890`")
         return
+
+    # حالت ارسال به گروه - دریافت متن پیام
     if isinstance(group_mode.get(ADMIN_CHAT_ID), int):
         group_id = group_mode[ADMIN_CHAT_ID]
         del group_mode[ADMIN_CHAT_ID]
@@ -187,8 +207,10 @@ async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=group_id, text=text)
             await update.message.reply_text("✅ پیام به گروه ارسال شد!")
         except Exception as e:
-            await update.message.reply_text(f"❌ خطا:\n{str(e)}\n\nمطمئن شو ربات ادمین گروهه.")
+            await update.message.reply_text(f"❌ خطا در ارسال:\n{str(e)}\n\nمطمئن شو ربات ادمین گروهه.")
         return
+
+    # پیام همگانی
     if reply_to.get(ADMIN_CHAT_ID) == "broadcast":
         del reply_to[ADMIN_CHAT_ID]
         success = 0
@@ -201,16 +223,22 @@ async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
         await update.message.reply_text(f"✅ پیام به {success} کاربر ارسال شد.")
         return
+
+    # پاسخ به کاربر خاص با ریپلای روی پیام اصلی
     if ADMIN_CHAT_ID in reply_to:
         target_id = reply_to[ADMIN_CHAT_ID]
         del reply_to[ADMIN_CHAT_ID]
         try:
-            await context.bot.send_message(chat_id=target_id, text=f"📨 پیام از ادمین:\n{text}")
+            # ریپلای روی پیام اصلی کاربر در چت ادمین
             reply_msg_id = message_map.get(f"reply_{target_id}")
+            await context.bot.send_message(
+                chat_id=target_id,
+                text=f"📨 پیام از ادمین:\n{text}"
+            )
             if reply_msg_id:
                 await context.bot.send_message(
                     chat_id=ADMIN_CHAT_ID,
-                    text=f"✅ پاسخ ارسال شد:\n{text}",
+                    text=f"✅ پیام ارسال شد!\n📤 پاسخ: {text}",
                     reply_to_message_id=reply_msg_id
                 )
             else:
