@@ -16,15 +16,42 @@ logging.basicConfig(
 users_db = {}
 blocked_users = set()
 reply_to = {}
-message_map = {}  # نگه‌داری message_id پیام اصلی برای ریپلای
-group_mode = {}   # حالت ارسال به گروه
+message_map = {}   # نگه‌داری message_id پیام اصلی برای ریپلای
+group_mode = {}    # حالت ارسال به گروه
 
+# ─────────────────────────────────────────────
+# 🆕 جدید: حالت ارسال هر کاربر (anonymous / normal)
+# ─────────────────────────────────────────────
+user_mode = {}   # {chat_id: "anonymous" | "normal"}
+
+
+# ══════════════════════════════════════════════
+#  کیبورد انتخاب حالت ارسال (برای کاربر)
+# ══════════════════════════════════════════════
+def mode_selection_keyboard():
+    keyboard = [
+        [InlineKeyboardButton("👤 با اسم (عادی)", callback_data="set_mode_normal")],
+        [InlineKeyboardButton("🕵️ ناشناس",         callback_data="set_mode_anonymous")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def settings_keyboard():
+    keyboard = [
+        [InlineKeyboardButton("👤 حالت عادی",  callback_data="set_mode_normal")],
+        [InlineKeyboardButton("🕵️ حالت ناشناس", callback_data="set_mode_anonymous")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+# ══════════════════════════════════════════════
+#  پنل ادمین (بدون تغییر)
+# ══════════════════════════════════════════════
 def admin_panel_keyboard():
     keyboard = [
-        [InlineKeyboardButton("👥 لیست کاربران", callback_data="list_users")],
-        [InlineKeyboardButton("🚫 لیست بلاک‌شده‌ها", callback_data="list_blocked")],
-        [InlineKeyboardButton("📊 آمار", callback_data="stats")],
-        [InlineKeyboardButton("📢 ارسال پیام همگانی", callback_data="broadcast")],
+        [InlineKeyboardButton("👥 لیست کاربران",       callback_data="list_users")],
+        [InlineKeyboardButton("🚫 لیست بلاک‌شده‌ها",  callback_data="list_blocked")],
+        [InlineKeyboardButton("📊 آمار",                callback_data="stats")],
+        [InlineKeyboardButton("📢 ارسال پیام همگانی",  callback_data="broadcast")],
         [InlineKeyboardButton("👥 ارسال پیام به گروه", callback_data="send_group")],
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -38,24 +65,87 @@ async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=admin_panel_keyboard()
     )
 
+
+# ══════════════════════════════════════════════
+#  /start  —  اگه کاربر جدیده، حالت رو بپرسه
+# ══════════════════════════════════════════════
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
+    user    = update.effective_user
     chat_id = update.effective_chat.id
+
     if update.effective_chat.type != "private":
         return
     if chat_id == ADMIN_CHAT_ID:
         await panel(update, context)
         return
-    users_db[chat_id] = {
-        "name": user.full_name,
-        "username": user.username or "ندارد",
-        "chat_id": chat_id
-    }
-    await update.message.reply_text("👋 سلام!\nپیامت رو بفرست، در اولین فرصت جواب میگیری ✅")
 
-async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
+    # ذخیره اطلاعات کاربر
+    users_db[chat_id] = {
+        "name":     user.full_name,
+        "username": user.username or "ندارد",
+        "chat_id":  chat_id
+    }
+
+    # 🆕 اگه کاربر هنوز حالت انتخاب نکرده، بپرس
+    if chat_id not in user_mode:
+        await update.message.reply_text(
+            "👋 *سلام!*\n\n"
+            "قبل از اینکه پیامت رو بفرستی، یه چیز ازت بپرسم:\n\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "👤 *با اسم* — ادمین اسم و پروفایلت رو میبینه\n"
+            "🕵️ *ناشناس* — هیچ اطلاعاتی از تو نمیفرسته\n"
+            "━━━━━━━━━━━━━━━━\n\n"
+            "💡 هر وقت خواستی از /settings میتونی حالتت رو عوض کنی.",
+            parse_mode="Markdown",
+            reply_markup=mode_selection_keyboard()
+        )
+    else:
+        current = "🕵️ ناشناس" if user_mode[chat_id] == "anonymous" else "👤 عادی"
+        await update.message.reply_text(
+            f"👋 *سلام {user.first_name}!*\n\n"
+            f"حالت فعلیت: {current}\n"
+            f"پیامت رو بفرست، در اولین فرصت جواب میگیری ✅\n\n"
+            f"💡 برای تغییر حالت: /settings",
+            parse_mode="Markdown"
+        )
+
+
+# ══════════════════════════════════════════════
+#  🆕 /settings  —  تغییر حالت ارسال
+# ══════════════════════════════════════════════
+async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+    if update.effective_chat.type != "private" or chat_id == ADMIN_CHAT_ID:
+        return
+
+    current = user_mode.get(chat_id)
+    if current == "anonymous":
+        status_text = "🕵️ *ناشناس* (فعال)"
+    elif current == "normal":
+        status_text = "👤 *عادی* (فعال)"
+    else:
+        status_text = "❓ هنوز انتخاب نشده"
+
+    await update.message.reply_text(
+        "⚙️ *تنظیمات ارسال پیام*\n\n"
+        f"حالت فعلی: {status_text}\n\n"
+        "━━━━━━━━━━━━━━━━\n"
+        "👤 *عادی* — اسم و پروفایلت برای ادمین نمایش داده میشه\n"
+        "🕵️ *ناشناس* — هیچ اطلاعاتی از تو ارسال نمیشه\n"
+        "━━━━━━━━━━━━━━━━\n\n"
+        "یه حالت انتخاب کن:",
+        parse_mode="Markdown",
+        reply_markup=settings_keyboard()
+    )
+
+
+# ══════════════════════════════════════════════
+#  فوروارد پیام به ادمین
+# ══════════════════════════════════════════════
+async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user    = update.effective_user
+    chat_id = update.effective_chat.id
+
     if update.effective_chat.type != "private":
         return
     if chat_id == ADMIN_CHAT_ID:
@@ -63,48 +153,118 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id in blocked_users:
         await update.message.reply_text("⛔ شما مسدود شده‌اید.")
         return
+
+    # 🆕 اگه هنوز حالت انتخاب نکرده، اول بپرس
+    if chat_id not in user_mode:
+        await update.message.reply_text(
+            "⚠️ قبل از ارسال پیام، لطفاً حالت ارسالت رو انتخاب کن:\n\n"
+            "👤 *با اسم* — ادمین اطلاعاتت رو میبینه\n"
+            "🕵️ *ناشناس* — هیچ اطلاعاتی ارسال نمیشه\n\n"
+            "💡 بعداً از /settings میتونی تغییرش بدی.",
+            parse_mode="Markdown",
+            reply_markup=mode_selection_keyboard()
+        )
+        return
+
     users_db[chat_id] = {
-        "name": user.full_name,
+        "name":     user.full_name,
         "username": user.username or "ندارد",
-        "chat_id": chat_id
+        "chat_id":  chat_id
     }
-    keyboard = [[
-        InlineKeyboardButton("↩️ پاسخ", callback_data=f"reply_{chat_id}"),
-        InlineKeyboardButton("🚫 بلاک", callback_data=f"block_{chat_id}"),
-    ]]
-    sender_info = (
-        f"📩 *پیام جدید*\n"
-        f"👤 نام: {user.full_name}\n"
-        f"🆔 یوزرنیم: @{user.username if user.username else 'ندارد'}\n"
-        f"🔢 Chat ID: `{chat_id}`\n"
-        f"{'─' * 25}"
-    )
-    info_msg = await context.bot.send_message(
-        chat_id=ADMIN_CHAT_ID,
-        text=sender_info,
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    # فوروارد پیام و ذخیره message_id برای ریپلای
-    fwd = await update.message.forward(chat_id=ADMIN_CHAT_ID)
-    # ذخیره: chat_id کاربر → message_id پیام فوروارد شده
-    message_map[f"reply_{chat_id}"] = fwd.message_id
 
-    await update.message.reply_text("✅ پیامت دریافت شد، به زودی جواب میگیری.")
+    # ─── حالت ناشناس ───────────────────────────
+    if user_mode[chat_id] == "anonymous":
+        keyboard = [[
+            InlineKeyboardButton("↩️ پاسخ",  callback_data=f"reply_{chat_id}"),
+            InlineKeyboardButton("🚫 بلاک",  callback_data=f"block_{chat_id}"),
+        ]]
+        sender_info = (
+            f"📩 *پیام جدید*\n"
+            f"🕵️ *ناشناس*\n"
+            f"🔢 Chat ID: `{chat_id}`\n"
+            f"{'─' * 25}"
+        )
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=sender_info,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        # کپی پیام به جای فوروارد (ناشناس میمونه)
+        fwd = await update.message.copy_to(chat_id=ADMIN_CHAT_ID)
+        message_map[f"reply_{chat_id}"] = fwd.message_id
+        await update.message.reply_text("✅ پیام ناشناس ارسال شد، به زودی جواب میگیری 🕵️")
 
+    # ─── حالت عادی ─────────────────────────────
+    else:
+        keyboard = [[
+            InlineKeyboardButton("↩️ پاسخ",  callback_data=f"reply_{chat_id}"),
+            InlineKeyboardButton("🚫 بلاک",  callback_data=f"block_{chat_id}"),
+        ]]
+        sender_info = (
+            f"📩 *پیام جدید*\n"
+            f"👤 نام: {user.full_name}\n"
+            f"🆔 یوزرنیم: @{user.username if user.username else 'ندارد'}\n"
+            f"🔢 Chat ID: `{chat_id}`\n"
+            f"{'─' * 25}"
+        )
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=sender_info,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        fwd = await update.message.forward(chat_id=ADMIN_CHAT_ID)
+        message_map[f"reply_{chat_id}"] = fwd.message_id
+        await update.message.reply_text("✅ پیامت دریافت شد، به زودی جواب میگیری.")
+
+
+# ══════════════════════════════════════════════
+#  هندلر دکمه‌ها
+# ══════════════════════════════════════════════
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
+    query   = update.callback_query
     await query.answer()
-    data = query.data
-    if query.message.chat.id != ADMIN_CHAT_ID:
+    data    = query.data
+    chat_id = query.message.chat.id
+
+    # ─── 🆕 انتخاب حالت توسط کاربر ──────────────
+    if data in ("set_mode_normal", "set_mode_anonymous"):
+        user_chat_id = query.from_user.id
+        if user_chat_id == ADMIN_CHAT_ID:
+            return
+
+        if data == "set_mode_normal":
+            user_mode[user_chat_id] = "normal"
+            await query.edit_message_text(
+                "✅ *حالت عادی فعال شد!*\n\n"
+                "👤 از این به بعد اسم و پروفایلت همراه پیامت ارسال میشه.\n\n"
+                "💡 برای تغییر: /settings\n\n"
+                "حالا پیامت رو بفرست 👇",
+                parse_mode="Markdown"
+            )
+        else:
+            user_mode[user_chat_id] = "anonymous"
+            await query.edit_message_text(
+                "✅ *حالت ناشناس فعال شد!*\n\n"
+                "🕵️ از این به بعد هیچ اطلاعاتی از تو ارسال نمیشه.\n\n"
+                "💡 برای تغییر: /settings\n\n"
+                "حالا پیامت رو بفرست 👇",
+                parse_mode="Markdown"
+            )
+        return
+
+    # ─── بقیه دکمه‌ها فقط برای ادمین ─────────────
+    if chat_id != ADMIN_CHAT_ID:
         return
 
     if data.startswith("reply_"):
         target_id = int(data.split("_")[1])
         reply_to[ADMIN_CHAT_ID] = target_id
         user_info = users_db.get(target_id, {})
+        name = user_info.get("name", "ناشناس") if user_mode.get(target_id) != "anonymous" else "🕵️ ناشناس"
         await query.message.reply_text(
-            f"✍️ پیامت رو بنویس، برای *{user_info.get('name', target_id)}* ارسال میشه.",
+            f"✍️ پیامت رو بنویس، برای *{name}* ارسال میشه.",
             parse_mode="Markdown"
         )
 
@@ -124,11 +284,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not users_db:
             await query.message.reply_text("👥 هنوز هیچ کاربری نداری.")
             return
-        text = "👥 *لیست کاربران:*\n\n"
+        text     = "👥 *لیست کاربران:*\n\n"
         keyboard = []
         for uid, info in users_db.items():
-            blocked = "🚫" if uid in blocked_users else "✅"
-            text += f"{blocked} {info['name']} | @{info['username']} | `{uid}`\n"
+            blocked  = "🚫" if uid in blocked_users else "✅"
+            mode_tag = "🕵️" if user_mode.get(uid) == "anonymous" else "👤"
+            text    += f"{blocked}{mode_tag} {info['name']} | @{info['username']} | `{uid}`\n"
             keyboard.append([
                 InlineKeyboardButton(f"↩️ پاسخ به {info['name']}", callback_data=f"reply_{uid}"),
                 InlineKeyboardButton("🚫 بلاک" if uid not in blocked_users else "✅ آنبلاک",
@@ -141,20 +302,30 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not blocked_users:
             await query.message.reply_text("🚫 هیچ کاربری بلاک نشده.")
             return
-        text = "🚫 *کاربران بلاک‌شده:*\n\n"
+        text     = "🚫 *کاربران بلاک‌شده:*\n\n"
         keyboard = []
         for uid in blocked_users:
-            info = users_db.get(uid, {"name": str(uid), "username": "ندارد"})
+            info  = users_db.get(uid, {"name": str(uid), "username": "ندارد"})
             text += f"🚫 {info['name']} | @{info['username']} | `{uid}`\n"
             keyboard.append([InlineKeyboardButton(f"✅ آنبلاک {info['name']}", callback_data=f"unblock_{uid}")])
         keyboard.append([InlineKeyboardButton("🔙 برگشت", callback_data="back")])
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data == "stats":
-        total = len(users_db)
+        total   = len(users_db)
         blocked = len(blocked_users)
-        active = total - blocked
-        text = f"📊 *آمار ربات*\n\n👥 کل کاربران: {total}\n✅ کاربران فعال: {active}\n🚫 بلاک‌شده‌ها: {blocked}\n"
+        active  = total - blocked
+        anon    = sum(1 for uid in users_db if user_mode.get(uid) == "anonymous")
+        normal  = sum(1 for uid in users_db if user_mode.get(uid) == "normal")
+        text = (
+            f"📊 *آمار ربات*\n\n"
+            f"👥 کل کاربران: {total}\n"
+            f"✅ کاربران فعال: {active}\n"
+            f"🚫 بلاک‌شده‌ها: {blocked}\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"🕵️ ناشناس: {anon}\n"
+            f"👤 عادی: {normal}\n"
+        )
         await query.message.reply_text(text, parse_mode="Markdown",
                                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 برگشت", callback_data="back")]]))
 
@@ -176,6 +347,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=admin_panel_keyboard()
         )
 
+
+# ══════════════════════════════════════════════
+#  هندلر متن ادمین (بدون تغییر اصلی)
+# ══════════════════════════════════════════════
 async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if update.effective_chat.type != "private":
@@ -229,7 +404,6 @@ async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_id = reply_to[ADMIN_CHAT_ID]
         del reply_to[ADMIN_CHAT_ID]
         try:
-            # ریپلای روی پیام اصلی کاربر در چت ادمین
             reply_msg_id = message_map.get(f"reply_{target_id}")
             await context.bot.send_message(
                 chat_id=target_id,
@@ -246,10 +420,15 @@ async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             await update.message.reply_text("❌ ارسال پیام ناموفق بود.")
 
+
+# ══════════════════════════════════════════════
+#  main
+# ══════════════════════════════════════════════
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("panel", panel))
+    app.add_handler(CommandHandler("start",    start))
+    app.add_handler(CommandHandler("panel",    panel))
+    app.add_handler(CommandHandler("settings", settings))   # 🆕
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_text))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND & ~filters.TEXT, forward_message))
