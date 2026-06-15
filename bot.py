@@ -57,7 +57,7 @@ pending_receipt_input = set()
 pending_coin_add   = {}      # {ADMIN_CHAT_ID: target_chat_id}
 
 # ── خاموش/روشن ربات ─────────────────────────
-bot_active = True            # ادمین می‌تونه ربات رو خاموش کنه
+bot_state = {"active": True}  # ادمین می‌تونه ربات رو خاموش کنه
 
 # ── اولویت پیام ──────────────────────────────
 PRIORITY_LEVELS = {
@@ -145,7 +145,7 @@ def plans_keyboard():
 
 
 def admin_panel_keyboard():
-    status = "🔴 خاموش" if not bot_active else "🟢 روشن"
+    status = "🟢 روشن" if bot_state["active"] else "🔴 خاموش"
     keyboard = [
         [InlineKeyboardButton("👥 لیست کاربران",         callback_data="list_users")],
         [InlineKeyboardButton("🚫 لیست بلاک‌شده‌ها",    callback_data="list_blocked")],
@@ -262,7 +262,7 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ شما مسدود شده‌اید.")
         return
 
-    if not bot_active:
+    if not bot_state["active"]:
         await update.message.reply_text("⚠️ ربات در حال حاضر غیرفعال است. لطفاً بعداً تلاش کنید.")
         return
 
@@ -569,7 +569,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_chat_id = query.from_user.id
         if user_chat_id == ADMIN_CHAT_ID:
             return
-        if not bot_active:
+        if not bot_state["active"]:
             await query.edit_message_text("⚠️ ربات در حال حاضر غیرفعال است.")
             return
         await query.edit_message_text(
@@ -840,7 +840,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🕵️ ناشناس: {anon}\n"
             f"👤 عادی: {normal}\n"
             f"━━━━━━━━━━━━\n"
-            f"⚡ وضعیت ربات: {'🟢 روشن' if bot_active else '🔴 خاموش'}"
+            f"⚡ وضعیت ربات: {'🟢 روشن' if bot_state["active"] else '🔴 خاموش'}"
         )
         await query.message.reply_text(text, parse_mode="Markdown",
                                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 برگشت", callback_data="back")]]))
@@ -1019,12 +1019,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── خاموش/روشن ربات ─────────────────────
     if data == "toggle_bot":
-        global bot_active
-        bot_active = not bot_active
-        status = "🟢 روشن شد" if bot_active else "🔴 خاموش شد"
+        bot_state["active"] = not bot_state["active"]
+        status = "🟢 روشن شد" if bot_state["active"] else "🔴 خاموش شد"
+        msg = "کاربران میتونن پیام بفرستن." if bot_state["active"] else "کاربران نمیتونن پیام بفرستن."
         await query.message.reply_text(
-            f"⚡ *وضعیت ربات:* {status}\n\n"
-            f"{'کاربران میتونن پیام بفرستن.' if bot_active else 'کاربران نمیتونن پیام بفرستن.'}",
+            f"⚡ *وضعیت ربات:* {status}\n\n{msg}",
             parse_mode="Markdown",
             reply_markup=admin_panel_keyboard()
         )
