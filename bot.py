@@ -1,15 +1,28 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+# ══════════════════════════════════════════════
+#  تایم‌زون تهران — UTC+3:30 (بدون نیاز به pytz)
+#  اگه pytz نصب باشه از اون استفاده میکنه (DST رو هم درنظر میگیره)
+#  اگه نباشه از UTC+3:30 ثابت استفاده میکنه
+# ══════════════════════════════════════════════
 try:
     import pytz
     TEHRAN_TZ = pytz.timezone("Asia/Tehran")
     def now_tehran():
+        """زمان دقیق تهران — با احتساب ساعت تابستانی اگه pytz باشه"""
         return datetime.now(TEHRAN_TZ)
 except ImportError:
-    TEHRAN_TZ = None
+    # UTC+3:30 ثابت — بدون DST
+    TEHRAN_TZ = timezone(timedelta(hours=3, minutes=30))
     def now_tehran():
-        from datetime import timezone, timedelta
-        return datetime.now(timezone(timedelta(hours=3, minutes=30)))
+        return datetime.now(TEHRAN_TZ)
+
+def fmt_dt(dt=None):
+    """فرمت استاندارد تاریخ و ساعت تهران — مثلاً ۱۴۰۳-۰۲-۱۵ ساعت ۱۴:۳۲"""
+    if dt is None:
+        dt = now_tehran()
+    return dt.strftime("%Y-%m-%d | %H:%M") + " (تهران)"
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, MessageHandler, CommandHandler,
@@ -77,6 +90,28 @@ PRIORITY_LEVELS = {
     "urgent": {"label": "🔴 فوری",  "emoji": "🔴", "cost": 30, "title": "فوری"},
 }
 
+# ══════════════════════════════════════════════
+#  🆕 دیتابیس‌های جدید
+# ══════════════════════════════════════════════
+
+# ── پروفایل کاربران ──────────────────────────
+# user_profiles: {chat_id: {join_date, msg_count, admin_note, block_history: [], last_seen}}
+user_profiles  = {}
+
+# ── سیستم توکن ربات‌سازی ─────────────────────
+# bot_tokens: {token_str: {chat_id, plan_id, created_at, used: bool, bot_username}}
+bot_tokens     = {}
+# user_bot_tokens: {chat_id: [token_str, ...]}   — توکن‌هایی که به این کاربر داده شده
+user_bot_tokens = {}
+# pending_token_input: {ADMIN_CHAT_ID: target_chat_id}  — ادمین داره توکن میفرسته
+pending_token_input = {}
+# user_submitting_token: set  — کاربرانی که دارن توکن وارد میکنن
+user_submitting_token = set()
+
+# ── یادداشت روی کاربر ────────────────────────
+# pending_note_input: {ADMIN_CHAT_ID: target_chat_id}
+pending_note_input = {}
+
 
 # ══════════════════════════════════════════════
 #  توابع کمکی
@@ -84,7 +119,7 @@ PRIORITY_LEVELS = {
 def add_coins(chat_id, amount, reason=""):
     user_coins[chat_id] = user_coins.get(chat_id, 0) + amount
     sign  = "➕" if amount >= 0 else "➖"
-    entry = f"{sign} {abs(amount)} سکه — {reason or 'بدون توضیح'} | {now_tehran().strftime('%Y-%m-%d %H:%M')}"
+    entry = f"{sign} {abs(amount)} سکه — {reason or 'بدون توضیح'} | {fmt_dt()}"
     user_history.setdefault(chat_id, []).append(entry)
     return user_coins[chat_id]
 
@@ -113,6 +148,129 @@ def subscription_status_text(chat_id):
 
 
 # ══════════════════════════════════════════════
+#  🆕 توابع پروفایل کاربر
+# ══════════════════════════════════════════════
+def ensure_profile(chat_id):
+    """اگه پروفایل کاربر وجود نداشت، بساز"""
+    if chat_id not in user_profiles:
+        user_profiles[chat_id] = {
+            "join_date":    fmt_dt(),    # تاریخ عضویت
+            "msg_count":    0,           # تعداد پیام‌های ارسالی
+            "admin_note":   "",          # یادداشت ادمین
+            "block_history": [],         # سابقه بلاک‌ها
+            "last_seen":    fmt_dt(),    # آخرین فعالیت
+        }
+    return user_profiles[chat_id]
+
+
+def update_last_seen(chat_id):
+    """آپدیت آخرین فعالیت کاربر"""
+    p = ensure_profile(chat_id)
+    p["last_seen"] = fmt_dt()
+
+
+def increment_msg(chat_id):
+    """یه پیام به شمارنده اضافه کن"""
+    p = ensure_profile(chat_id)
+    p["msg_count"] = p.get("msg_count", 0) + 1
+
+
+def get_full_profile_text(chat_id):
+    """متن کامل پروفایل کاربر برای ادمین"""
+    info    = users_db.get(chat_id, {"name": str(chat_id), "username": "ندارد"})
+    p       = ensure_profile(chat_id)
+    coins   = get_coins(chat_id)
+    sub     = subscription_status_text(chat_id)
+    mode    = "🕵️ ناشناس" if user_mode.get(chat_id) == "anonymous" else "👤 عادی"
+    blocked = "🚫 بله" if chat_id in blocked_users else "✅ خیر"
+    note    = p.get("admin_note") or "—"
+    tokens  = user_bot_tokens.get(chat_id, [])
+    token_lines = ""
+    for t in tokens:
+        td = bot_tokens.get(t, {})
+        status = "✅ استفاده شده" if td.get("used") else "⏳ استفاده نشده"
+        token_lines += f"  • `{t}` — {status}\n"
+    if not token_lines:
+        token_lines = "  — توکنی ندارد\n"
+
+    block_hist = p.get("block_history", [])
+    block_hist_text = "\n".join(f"  • {b}" for b in block_hist[-3:]) if block_hist else "  — سابقه‌ای ندارد"
+
+    return (
+        f"👤 *پروفایل کامل کاربر*\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🏷 نام: *{info.get('name','؟')}*\n"
+        f"🆔 یوزرنیم: @{info.get('username','ندارد')}\n"
+        f"🔢 Chat ID: `{chat_id}`\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📅 تاریخ عضویت: {p.get('join_date','؟')}\n"
+        f"🕐 آخرین فعالیت: {p.get('last_seen','؟')}\n"
+        f"📨 تعداد پیام‌ها: {p.get('msg_count', 0)}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💰 موجودی سکه: {coins}\n"
+        f"📦 اشتراک: {sub}\n"
+        f"🔐 حالت ارسال: {mode}\n"
+        f"🚫 بلاک‌شده: {blocked}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🤖 توکن‌های ربات:\n{token_lines}"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📋 سابقه بلاک:\n{block_hist_text}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📝 یادداشت ادمین: {note}"
+    )
+
+
+# ══════════════════════════════════════════════
+#  🆕 توابع سیستم توکن ربات‌سازی
+# ══════════════════════════════════════════════
+import secrets
+import string
+
+def generate_token():
+    """ساخت توکن یکتا — مثلاً BOT-A3X9K2"""
+    chars = string.ascii_uppercase + string.digits
+    code  = "".join(secrets.choice(chars) for _ in range(8))
+    return f"BOT-{code}"
+
+
+def create_bot_token(chat_id, plan_id="plan1"):
+    """
+    یه توکن جدید بساز و به کاربر اختصاص بده.
+    توکن رو ادمین بعد از تایید اشتراک بهش میده.
+    """
+    token = generate_token()
+    # مطمئن میشیم یکتاست
+    while token in bot_tokens:
+        token = generate_token()
+
+    bot_tokens[token] = {
+        "chat_id":    chat_id,
+        "plan_id":    plan_id,
+        "created_at": fmt_dt(),
+        "used":       False,
+        "bot_username": None,   # بعد از استفاده پر میشه
+    }
+    user_bot_tokens.setdefault(chat_id, []).append(token)
+    return token
+
+
+def use_bot_token(token_str, bot_username):
+    """
+    وقتی کاربر توکن رو وارد کرد و ربات رو ساخت،
+    توکن رو به عنوان استفاده‌شده علامت بزن.
+    """
+    td = bot_tokens.get(token_str)
+    if not td:
+        return False, "توکن نامعتبر است"
+    if td["used"]:
+        return False, "این توکن قبلاً استفاده شده"
+    td["used"]         = True
+    td["bot_username"] = bot_username
+    td["used_at"]      = fmt_dt()
+    return True, "ok"
+
+
+# ══════════════════════════════════════════════
 #  کیبوردها
 # ══════════════════════════════════════════════
 def main_menu_keyboard():
@@ -120,6 +278,7 @@ def main_menu_keyboard():
         [InlineKeyboardButton("📨 ارسال پیام به ادمین", callback_data="goto_send")],
         [InlineKeyboardButton("🛒 خرید اشتراک",         callback_data="show_plans")],
         [InlineKeyboardButton("👤 حساب من",             callback_data="my_account")],
+        [InlineKeyboardButton("🤖 ربات من",             callback_data="my_bots")],   # 🆕
         [InlineKeyboardButton("⚙️ تنظیمات",             callback_data="open_settings")],
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -168,6 +327,8 @@ def admin_panel_keyboard():
         [InlineKeyboardButton("🛒 مدیریت اشتراک‌ها",     callback_data="manage_subs")],
         [InlineKeyboardButton("🧾 رسیدهای در انتظار",    callback_data="pending_receipts_admin")],
         [InlineKeyboardButton("💳 تنظیم شماره کارت",      callback_data="set_card")],
+        # ── 🆕 دکمه‌های جدید ──────────────────────
+        [InlineKeyboardButton("🤖 مدیریت توکن ربات‌سازی", callback_data="manage_tokens")],
         [InlineKeyboardButton(f"⚡ وضعیت ربات: {status}", callback_data="toggle_bot")],
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -186,11 +347,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await panel(update, context)
         return
 
+    # ── 🆕 بررسی وضعیت ربات — اگه خاموشه هیچکاری نکن ──
+    if not bot_state["active"]:
+        await update.message.reply_text(
+            "⛔ *ربات در حال حاضر غیرفعال است.*\n\n"
+            "لطفاً بعداً مراجعه کنید.",
+            parse_mode="Markdown"
+        )
+        return
+
+    # ── ثبت کاربر در دیتابیس ──
     users_db[chat_id] = {
         "name":     user.full_name,
         "username": user.username or "ندارد",
         "chat_id":  chat_id
     }
+
+    # ── 🆕 ساخت/آپدیت پروفایل ──
+    ensure_profile(chat_id)
+    update_last_seen(chat_id)
 
     if chat_id not in user_mode:
         await update.message.reply_text(
@@ -274,9 +449,17 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ شما مسدود شده‌اید.")
         return
 
+    # ── 🆕 خاموشی کامل — هر نوع دسترسی قطع میشه ──
     if not bot_state["active"]:
-        await update.message.reply_text("⚠️ ربات در حال حاضر غیرفعال است. لطفاً بعداً تلاش کنید.")
+        await update.message.reply_text(
+            "⛔ *ربات در حال حاضر غیرفعال است.*\n\n"
+            "لطفاً بعداً مراجعه کنید.",
+            parse_mode="Markdown"
+        )
         return
+
+    # ── 🆕 آپدیت آخرین فعالیت ──
+    update_last_seen(chat_id)
 
     # انتظار دریافت رسید
     if chat_id in pending_receipt_input:
@@ -308,7 +491,7 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🆔 Chat ID: `{chat_id}`\n"
             f"📦 پلن: {plan.get('name','؟')} ({plan.get('price','؟')})\n"
             f"📅 مدت: {plan.get('days','؟')} روز\n"
-            f"⏰ زمان: {now_tehran().strftime('%Y-%m-%d %H:%M')}"
+            f"⏰ زمان: {fmt_dt()}"
         )
         try:
             if update.message.photo:
@@ -337,6 +520,81 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ خطا در ارسال رسید. دوباره امتحان کن.")
         return
 
+    # ── 🆕 بررسی ورود توکن ربات ──────────────────
+    if chat_id in user_submitting_token:
+        token_str = update.message.text.strip() if update.message.text else ""
+        if not token_str:
+            await update.message.reply_text("❌ توکن نامعتبر است. لطفاً توکن متنی ارسال کن.")
+            return
+        user_submitting_token.discard(chat_id)
+
+        # بررسی اینکه توکن متعلق به همین کاربر باشه
+        td = bot_tokens.get(token_str)
+        if not td:
+            await update.message.reply_text(
+                "❌ *توکن نامعتبر است!*\n\nاگه مشکل داری با ادمین تماس بگیر.",
+                parse_mode="Markdown"
+            )
+            return
+        if td["chat_id"] != chat_id:
+            await update.message.reply_text("❌ این توکن متعلق به شما نیست.")
+            return
+        if td["used"]:
+            await update.message.reply_text(
+                f"⚠️ این توکن قبلاً استفاده شده.\n🤖 ربات: @{td.get('bot_username','؟')}",
+                parse_mode="Markdown"
+            )
+            return
+
+        # درخواست یوزرنیم ربات
+        context.user_data["pending_token"] = token_str
+        await update.message.reply_text(
+            "✅ *توکن معتبر است!*\n\n"
+            "🤖 حالا یوزرنیم ربات تلگرامی که ساختی رو بفرست:\n"
+            "(مثلاً: `@MyAwesomeBot`)\n\n"
+            "📌 اگه هنوز ربات نساختی از @BotFather اقدام کن.",
+            parse_mode="Markdown"
+        )
+        return
+
+    # ── 🆕 دریافت یوزرنیم ربات بعد از توکن ──────
+    if context.user_data.get("pending_token"):
+        bot_username = update.message.text.strip() if update.message.text else ""
+        if not bot_username:
+            await update.message.reply_text("❌ یوزرنیم معتبر نیست.")
+            return
+        token_str = context.user_data.pop("pending_token")
+        ok, msg   = use_bot_token(token_str, bot_username)
+        if ok:
+            await update.message.reply_text(
+                f"🎉 *ربات شما ثبت شد!*\n\n"
+                f"🤖 یوزرنیم: {bot_username}\n"
+                f"🔑 توکن: `{token_str}`\n\n"
+                f"ادمین از ثبت ربات شما باخبر شد.\n"
+                f"در صورت نیاز به راه‌اندازی، با ادمین تماس بگیر. 🙏",
+                parse_mode="Markdown",
+                reply_markup=main_menu_keyboard()
+            )
+            # اطلاع به ادمین
+            info = users_db.get(chat_id, {"name": str(chat_id)})
+            try:
+                await context.bot.send_message(
+                    chat_id=ADMIN_CHAT_ID,
+                    text=(
+                        f"🤖 *ربات جدید ثبت شد!*\n\n"
+                        f"👤 کاربر: {info['name']} | `{chat_id}`\n"
+                        f"🔑 توکن: `{token_str}`\n"
+                        f"🤖 یوزرنیم ربات: {bot_username}\n"
+                        f"⏰ زمان: {fmt_dt()}"
+                    ),
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
+        else:
+            await update.message.reply_text(f"❌ خطا: {msg}")
+        return
+
     # اگه هنوز حالت انتخاب نکرده
     if chat_id not in user_mode:
         await update.message.reply_text(
@@ -351,6 +609,9 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "username": user.username or "ندارد",
         "chat_id":  chat_id
     }
+
+    # 🆕 شمارش پیام
+    increment_msg(chat_id)
 
     # پیام متنی → انتخاب اولویت
     if update.message.text:
@@ -621,14 +882,70 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mode   = "🕵️ ناشناس" if user_mode.get(user_chat_id) == "anonymous" else "👤 عادی"
         history_lines = user_history.get(user_chat_id, [])
         history_text  = "\n".join(history_lines[-5:]) if history_lines else "ندارید"
+        p = ensure_profile(user_chat_id)
         await query.edit_message_text(
             f"👤 *حساب من*\n\n"
             f"💰 موجودی سکه: {coins}\n"
             f"🔐 حالت ارسال: {mode}\n"
-            f"📦 اشتراک: {sub}\n\n"
+            f"📦 اشتراک: {sub}\n"
+            f"📨 تعداد پیام‌های ارسالی: {p.get('msg_count', 0)}\n"
+            f"📅 عضویت: {p.get('join_date','؟')}\n\n"
             f"📋 *آخرین تراکنش‌های سکه:*\n{history_text}",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 برگشت", callback_data="back_main")]])
+        )
+        return
+
+    # ── 🆕 ربات من (سیستم توکن) ──────────────
+    if data == "my_bots":
+        user_chat_id = query.from_user.id
+        if user_chat_id == ADMIN_CHAT_ID:
+            return
+        tokens = user_bot_tokens.get(user_chat_id, [])
+        if not tokens:
+            await query.edit_message_text(
+                "🤖 *ربات من*\n\n"
+                "شما هنوز توکنی دریافت نکرده‌اید.\n\n"
+                "برای دریافت توکن ربات‌سازی، اشتراک خریداری کنید\n"
+                "و از ادمین درخواست توکن کنید.",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🛒 خرید اشتراک", callback_data="show_plans")],
+                    [InlineKeyboardButton("🔙 برگشت",        callback_data="back_main")],
+                ])
+            )
+            return
+
+        text = "🤖 *ربات‌های من*\n\n"
+        kb   = []
+        for t in tokens:
+            td = bot_tokens.get(t, {})
+            if td.get("used"):
+                status = f"✅ فعال — @{td.get('bot_username','؟')}"
+            else:
+                status = "⏳ استفاده نشده"
+            text += f"🔑 `{t}`\n   {status}\n\n"
+
+        # اگه توکن استفاده‌نشده دارن، دکمه وارد کردن توکن نشون بده
+        has_unused = any(not bot_tokens.get(t, {}).get("used") for t in tokens)
+        if has_unused:
+            kb.append([InlineKeyboardButton("🔑 وارد کردن توکن", callback_data="submit_token")])
+        kb.append([InlineKeyboardButton("🔙 برگشت", callback_data="back_main")])
+
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    if data == "submit_token":
+        user_chat_id = query.from_user.id
+        if user_chat_id == ADMIN_CHAT_ID:
+            return
+        user_submitting_token.add(user_chat_id)
+        await query.edit_message_text(
+            "🔑 *وارد کردن توکن ربات‌سازی*\n\n"
+            "توکنی که از ادمین دریافت کردی رو اینجا بفرست:\n"
+            "(مثلاً: `BOT-A3X9K2AB`)\n\n"
+            "⚠️ هر توکن فقط یک بار قابل استفاده است.",
+            parse_mode="Markdown"
         )
         return
 
@@ -788,6 +1105,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_id = int(data.split("_")[1])
         blocked_users.add(target_id)
         user_info = users_db.get(target_id, {})
+        # 🆕 ثبت در سابقه بلاک
+        p = ensure_profile(target_id)
+        p.setdefault("block_history", []).append(f"🚫 بلاک شد — {fmt_dt()}")
         await query.message.reply_text(f"🚫 کاربر *{user_info.get('name', target_id)}* بلاک شد.", parse_mode="Markdown")
         return
 
@@ -795,6 +1115,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_id = int(data.split("_")[1])
         blocked_users.discard(target_id)
         user_info = users_db.get(target_id, {})
+        # 🆕 ثبت در سابقه بلاک
+        p = ensure_profile(target_id)
+        p.setdefault("block_history", []).append(f"✅ آنبلاک شد — {fmt_dt()}")
         await query.message.reply_text(f"✅ کاربر *{user_info.get('name', target_id)}* آنبلاک شد.", parse_mode="Markdown")
         return
 
@@ -810,12 +1133,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             mode_tag = "🕵️" if user_mode.get(uid) == "anonymous" else "👤"
             coins    = get_coins(uid)
             sub_tag  = "⭐" if has_active_subscription(uid) else ""
-            text    += f"{blocked}{mode_tag}{sub_tag} {info['name']} | @{info['username']} | `{uid}` | 💰{coins}\n"
+            p        = ensure_profile(uid)
+            text    += f"{blocked}{mode_tag}{sub_tag} {info['name']} | @{info['username']} | `{uid}` | 💰{coins} | 📨{p.get('msg_count',0)}\n"
             keyboard.append([
-                InlineKeyboardButton(f"↩️ {info['name']}",  callback_data=f"reply_{uid}"),
+                InlineKeyboardButton(f"👁 {info['name']}",  callback_data=f"full_profile_{uid}"),
+                InlineKeyboardButton("↩️ پاسخ",             callback_data=f"reply_{uid}"),
                 InlineKeyboardButton("🚫" if uid not in blocked_users else "✅ آنبلاک",
                                      callback_data=f"{'block' if uid not in blocked_users else 'unblock'}_{uid}"),
-                InlineKeyboardButton("💰 سکه", callback_data=f"addcoin_{uid}"),
             ])
         keyboard.append([InlineKeyboardButton("🔙 برگشت", callback_data="back")])
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -1049,11 +1373,199 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "toggle_bot":
         bot_state["active"] = not bot_state["active"]
         status = "🟢 روشن شد" if bot_state["active"] else "🔴 خاموش شد"
-        msg = "کاربران میتونن پیام بفرستن." if bot_state["active"] else "کاربران نمیتونن پیام بفرستن."
+        msg = "کاربران میتونن پیام بفرستن." if bot_state["active"] else "⛔ کاربران به هیچ چیزی دسترسی ندارن."
         await query.message.reply_text(
             f"⚡ *وضعیت ربات:* {status}\n\n{msg}",
             parse_mode="Markdown",
             reply_markup=admin_panel_keyboard()
+        )
+        return
+
+    # ══════════════════════════════════════════
+    # 🆕 مدیریت توکن ربات‌سازی (ادمین)
+    # ══════════════════════════════════════════
+    if data == "manage_tokens":
+        if not users_db:
+            await query.message.reply_text("👥 هنوز هیچ کاربری نداری.")
+            return
+        text = (
+            "🤖 *مدیریت توکن ربات‌سازی*\n\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "این بخش بهت اجازه میده به کاربرانی که اشتراک خریدن\n"
+            "یه توکن یکتا بدی تا باهاش ربات بسازن.\n\n"
+            "📌 *روند کار:*\n"
+            "۱. کاربر اشتراک میخره و رسید میفرسته\n"
+            "۲. تو اشتراک رو تایید میکنی\n"
+            "۳. از اینجا بهش توکن میدی\n"
+            "۴. کاربر توکن رو در ربات وارد میکنه\n"
+            "۵. یوزرنیم ربات ثبت میشه\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "یه کاربر انتخاب کن:"
+        )
+        keyboard = []
+        for uid, info in users_db.items():
+            has_sub = "⭐" if has_active_subscription(uid) else "  "
+            token_count = len(user_bot_tokens.get(uid, []))
+            keyboard.append([InlineKeyboardButton(
+                f"{has_sub} {info['name']} — {token_count} توکن",
+                callback_data=f"token_for_{uid}"
+            )])
+        keyboard.append([InlineKeyboardButton("📋 همه توکن‌ها", callback_data="list_all_tokens")])
+        keyboard.append([InlineKeyboardButton("🔙 برگشت",        callback_data="back")])
+        await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    if data.startswith("token_for_"):
+        target_id = int(data[len("token_for_"):])
+        info      = users_db.get(target_id, {"name": str(target_id)})
+        tokens    = user_bot_tokens.get(target_id, [])
+        sub_text  = subscription_status_text(target_id)
+
+        token_lines = ""
+        for t in tokens:
+            td = bot_tokens.get(t, {})
+            if td.get("used"):
+                token_lines += f"  ✅ `{t}` — @{td.get('bot_username','؟')}\n"
+            else:
+                token_lines += f"  ⏳ `{t}` — استفاده نشده\n"
+        if not token_lines:
+            token_lines = "  — توکنی ندارد\n"
+
+        keyboard = [
+            [InlineKeyboardButton("🆕 صدور توکن جدید",     callback_data=f"issue_token_{target_id}")],
+            [InlineKeyboardButton("👁 پروفایل کامل",        callback_data=f"full_profile_{target_id}")],
+            [InlineKeyboardButton("🔙 برگشت",               callback_data="manage_tokens")],
+        ]
+        await query.message.reply_text(
+            f"🤖 *توکن‌های {info['name']}*\n\n"
+            f"📦 اشتراک: {sub_text}\n\n"
+            f"🔑 توکن‌ها:\n{token_lines}",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
+    if data.startswith("issue_token_"):
+        target_id = int(data[len("issue_token_"):])
+        info      = users_db.get(target_id, {"name": str(target_id)})
+        # بررسی اشتراک فعال
+        if not has_active_subscription(target_id):
+            await query.message.reply_text(
+                f"⚠️ *{info['name']}* اشتراک فعال ندارد!\n\n"
+                "آیا مطمئنی میخوای توکن بدی؟",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✅ بله، صادر کن",   callback_data=f"confirm_issue_{target_id}")],
+                    [InlineKeyboardButton("❌ خیر",             callback_data=f"token_for_{target_id}")],
+                ])
+            )
+            return
+        # صدور توکن
+        token = create_bot_token(target_id)
+        await query.message.reply_text(
+            f"✅ *توکن جدید صادر شد!*\n\n"
+            f"👤 کاربر: {info['name']} | `{target_id}`\n"
+            f"🔑 توکن: `{token}`\n"
+            f"⏰ زمان: {fmt_dt()}\n\n"
+            f"📤 ارسال توکن به کاربر...",
+            parse_mode="Markdown"
+        )
+        # ارسال توکن به کاربر
+        try:
+            await context.bot.send_message(
+                chat_id=target_id,
+                text=(
+                    f"🎉 *توکن ربات‌سازی شما صادر شد!*\n\n"
+                    f"🔑 توکن اختصاصی شما:\n`{token}`\n\n"
+                    f"━━━━━━━━━━━━━━━━\n"
+                    f"📌 *راهنمای استفاده:*\n"
+                    f"۱. از @BotFather یه ربات جدید بساز\n"
+                    f"۲. به منوی «🤖 ربات من» برو\n"
+                    f"۳. روی «🔑 وارد کردن توکن» کلیک کن\n"
+                    f"۴. توکن بالا رو کپی و ارسال کن\n"
+                    f"۵. یوزرنیم ربات جدیدت رو وارد کن\n\n"
+                    f"⚠️ این توکن فقط یک بار قابل استفاده است.\n"
+                    f"⚠️ توکن را به کسی ندهید!"
+                ),
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🤖 ربات من", callback_data="my_bots")
+                ]])
+            )
+            await query.message.reply_text("✅ توکن با موفقیت به کاربر ارسال شد.")
+        except Exception as e:
+            await query.message.reply_text(f"⚠️ توکن صادر شد ولی ارسال به کاربر ناموفق بود:\n{e}")
+        return
+
+    if data.startswith("confirm_issue_"):
+        target_id = int(data[len("confirm_issue_"):])
+        info      = users_db.get(target_id, {"name": str(target_id)})
+        token     = create_bot_token(target_id)
+        await query.message.reply_text(
+            f"✅ توکن `{token}` برای *{info['name']}* صادر شد (بدون اشتراک).",
+            parse_mode="Markdown"
+        )
+        try:
+            await context.bot.send_message(
+                chat_id=target_id,
+                text=(
+                    f"🎉 *توکن ربات‌سازی شما صادر شد!*\n\n"
+                    f"🔑 توکن: `{token}`\n\n"
+                    f"برای استفاده به منوی «🤖 ربات من» برو."
+                ),
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+        return
+
+    if data == "list_all_tokens":
+        if not bot_tokens:
+            await query.message.reply_text("🔑 هیچ توکنی صادر نشده.")
+            return
+        text = "📋 *همه توکن‌های صادرشده:*\n\n"
+        for t, td in bot_tokens.items():
+            info = users_db.get(td["chat_id"], {"name": str(td["chat_id"])})
+            status = f"✅ @{td['bot_username']}" if td.get("used") else "⏳ استفاده نشده"
+            text += f"🔑 `{t}`\n👤 {info['name']} | {status}\n\n"
+        await query.message.reply_text(
+            text, parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 برگشت", callback_data="manage_tokens")]])
+        )
+        return
+
+    # ══════════════════════════════════════════
+    # 🆕 پروفایل کامل کاربر (ادمین)
+    # ══════════════════════════════════════════
+    if data.startswith("full_profile_"):
+        target_id = int(data[len("full_profile_"):])
+        profile_text = get_full_profile_text(target_id)
+        keyboard = [
+            [InlineKeyboardButton("↩️ پاسخ",             callback_data=f"reply_{target_id}")],
+            [InlineKeyboardButton("📝 یادداشت",           callback_data=f"set_note_{target_id}")],
+            [InlineKeyboardButton("🤖 توکن جدید",         callback_data=f"issue_token_{target_id}")],
+            [
+                InlineKeyboardButton("🚫 بلاک" if target_id not in blocked_users else "✅ آنبلاک",
+                    callback_data=f"{'block' if target_id not in blocked_users else 'unblock'}_{target_id}"),
+            ],
+            [InlineKeyboardButton("🔙 برگشت",             callback_data="list_users")],
+        ]
+        await query.message.reply_text(
+            profile_text, parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
+    if data.startswith("set_note_"):
+        target_id = int(data[len("set_note_"):])
+        pending_note_input[ADMIN_CHAT_ID] = target_id
+        info = users_db.get(target_id, {"name": str(target_id)})
+        current_note = user_profiles.get(target_id, {}).get("admin_note") or "—"
+        await query.message.reply_text(
+            f"📝 *یادداشت برای {info['name']}*\n\n"
+            f"یادداشت فعلی: {current_note}\n\n"
+            f"یادداشت جدید رو بنویس (یا بفرست 'حذف' تا پاک بشه):",
+            parse_mode="Markdown"
         )
         return
 
@@ -1070,6 +1582,19 @@ async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = update.message.text
+
+    # ─── یادداشت روی کاربر ───────────────────
+    if ADMIN_CHAT_ID in pending_note_input:
+        target_id = pending_note_input[ADMIN_CHAT_ID]
+        del pending_note_input[ADMIN_CHAT_ID]
+        p = ensure_profile(target_id)
+        if text.strip() == "حذف":
+            p["admin_note"] = ""
+            await update.message.reply_text("🗑 یادداشت حذف شد.")
+        else:
+            p["admin_note"] = text.strip()
+            await update.message.reply_text(f"📝 یادداشت ذخیره شد:\n{text.strip()}")
+        return
 
     # ─── تنظیم شماره کارت ────────────────────
     pending_card = context.bot_data.get("pending_card")
