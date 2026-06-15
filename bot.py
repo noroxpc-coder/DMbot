@@ -1,5 +1,15 @@
 import logging
 from datetime import datetime, timedelta
+try:
+    import pytz
+    TEHRAN_TZ = pytz.timezone("Asia/Tehran")
+    def now_tehran():
+        return datetime.now(TEHRAN_TZ)
+except ImportError:
+    TEHRAN_TZ = None
+    def now_tehran():
+        from datetime import timezone, timedelta
+        return datetime.now(timezone(timedelta(hours=3, minutes=30)))
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, MessageHandler, CommandHandler,
@@ -11,8 +21,11 @@ from telegram.ext import (
 # ══════════════════════════════════════════════
 BOT_TOKEN      = "8977895133:AAHdVjMrr-9-ceXXviV5Zt5I_vP93HxQqZY"
 ADMIN_CHAT_ID  = 1143598012
-CARD_NUMBER    = "6037-XXXX-XXXX-XXXX"   # شماره کارت خودت رو اینجا بذار
-CARD_OWNER     = "نام صاحب کارت"          # اسم صاحب کارت
+# شماره کارت — از پنل ادمین هم قابل تغییره
+bot_config = {
+    "card_number": "6037-XXXX-XXXX-XXXX",
+    "card_owner":  "نام صاحب کارت",
+}
 
 # ══════════════════════════════════════════════
 #  لاگ‌گیری
@@ -42,9 +55,7 @@ poll_votes     = {}          # {poll_id: {option_id: count, "question": str, "op
 # ── اشتراک ───────────────────────────────────
 # plans: {plan_id: {name, days, price, description}}
 subscription_plans = {
-    "plan_1": {"name": "برنزی",  "days": 30,  "price": "۲۹,۰۰۰ تومان",  "description": "دسترسی ۳۰ روزه"},
-    "plan_2": {"name": "نقره‌ای", "days": 90,  "price": "۷۹,۰۰۰ تومان",  "description": "دسترسی ۳ ماهه"},
-    "plan_3": {"name": "طلایی",  "days": 365, "price": "۲۴۹,۰۰۰ تومان", "description": "دسترسی ۱ ساله"},
+    "plan1": {"name": "اشتراک یک ماهه", "days": 30, "price": "۴۰,۰۰۰ تومان", "description": "دسترسی کامل ۳۰ روزه"},
 }
 # user_subscriptions: {chat_id: {"plan": plan_id, "expires": datetime}}
 user_subscriptions = {}
@@ -73,7 +84,7 @@ PRIORITY_LEVELS = {
 def add_coins(chat_id, amount, reason=""):
     user_coins[chat_id] = user_coins.get(chat_id, 0) + amount
     sign  = "➕" if amount >= 0 else "➖"
-    entry = f"{sign} {abs(amount)} سکه — {reason or 'بدون توضیح'} | {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    entry = f"{sign} {abs(amount)} سکه — {reason or 'بدون توضیح'} | {now_tehran().strftime('%Y-%m-%d %H:%M')}"
     user_history.setdefault(chat_id, []).append(entry)
     return user_coins[chat_id]
 
@@ -86,7 +97,7 @@ def has_active_subscription(chat_id):
     sub = user_subscriptions.get(chat_id)
     if not sub:
         return False
-    return datetime.now() < sub["expires"]
+    return now_tehran() < sub["expires"]
 
 
 def subscription_status_text(chat_id):
@@ -95,9 +106,9 @@ def subscription_status_text(chat_id):
         return "❌ ندارید"
     plan = subscription_plans.get(sub["plan"], {})
     expires = sub["expires"]
-    if datetime.now() >= expires:
+    if now_tehran() >= expires:
         return "⌛ منقضی شده"
-    remaining = (expires - datetime.now()).days
+    remaining = (expires - now_tehran()).days
     return f"✅ {plan.get('name','؟')} — {remaining} روز مانده (تا {expires.strftime('%Y-%m-%d')})"
 
 
@@ -156,6 +167,7 @@ def admin_panel_keyboard():
         [InlineKeyboardButton("💰 مدیریت سکه",            callback_data="manage_coins")],
         [InlineKeyboardButton("🛒 مدیریت اشتراک‌ها",     callback_data="manage_subs")],
         [InlineKeyboardButton("🧾 رسیدهای در انتظار",    callback_data="pending_receipts_admin")],
+        [InlineKeyboardButton("💳 تنظیم شماره کارت",      callback_data="set_card")],
         [InlineKeyboardButton(f"⚡ وضعیت ربات: {status}", callback_data="toggle_bot")],
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -286,7 +298,7 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ارسال رسید به ادمین با دکمه تایید/رد
         keyboard = [
             [
-                InlineKeyboardButton("✅ تایید و فعال‌سازی", callback_data=f"approve_sub_{chat_id}_{receipt_info['plan']}"),
+                InlineKeyboardButton("✅ تایید و فعال‌سازی", callback_data=f"approve_sub_{chat_id}::{receipt_info['plan']}"),
                 InlineKeyboardButton("❌ رد کردن",           callback_data=f"reject_sub_{chat_id}"),
             ]
         ]
@@ -296,7 +308,7 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🆔 Chat ID: `{chat_id}`\n"
             f"📦 پلن: {plan.get('name','؟')} ({plan.get('price','؟')})\n"
             f"📅 مدت: {plan.get('days','؟')} روز\n"
-            f"⏰ زمان: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            f"⏰ زمان: {now_tehran().strftime('%Y-%m-%d %H:%M')}"
         )
         try:
             if update.message.photo:
@@ -653,8 +665,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💰 مبلغ: *{plan['price']}*\n"
             f"📅 مدت: {plan['days']} روز\n\n"
             f"━━━━━━━━━━━━━━━━\n"
-            f"💳 شماره کارت:\n`{CARD_NUMBER}`\n"
-            f"👤 به نام: *{CARD_OWNER}*\n"
+            f"💳 شماره کارت:\n`{bot_config["card_number"]}`\n"
+            f"👤 به نام: *{bot_config["card_owner"]}*\n"
             f"━━━━━━━━━━━━━━━━\n\n"
             f"بعد از پرداخت، *تصویر رسید* رو اینجا ارسال کن 👇\n"
             f"(ادمین بررسی و اشتراکت رو فعال می‌کنه)",
@@ -675,18 +687,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("approve_sub_"):
         if chat_id != ADMIN_CHAT_ID:
             return
-        parts    = data.split("_")
-        # approve_sub_{chat_id}_{plan_id}
-        target_id = int(parts[2])
-        plan_id   = parts[3]
+        # approve_sub_{chat_id}::{plan_id}  — با :: جدا شده تا باگ split نداشته باشه
+        payload   = data[len("approve_sub_"):]
+        target_id_str, plan_id = payload.split("::", 1)
+        target_id = int(target_id_str)
         plan      = subscription_plans.get(plan_id, {})
-        expires   = datetime.now() + timedelta(days=plan.get("days", 30))
+        expires   = now_tehran() + timedelta(days=plan.get("days", 30))
         user_subscriptions[target_id] = {"plan": plan_id, "expires": expires}
         pending_receipts.pop(target_id, None)
         pending_receipt_input.discard(target_id)
 
         await query.edit_message_caption(
-            caption=query.message.caption + f"\n\n✅ *تایید شد* توسط ادمین — {datetime.now().strftime('%H:%M')}",
+            caption=query.message.caption + f"\n\n✅ *تایید شد* توسط ادمین — {now_tehran().strftime('%H:%M')}",
             parse_mode="Markdown"
         )
         try:
@@ -694,9 +706,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=target_id,
                 text=(
                     f"🎉 *اشتراک شما فعال شد!*\n\n"
-                    f"📦 پلن: *{plan.get('name','؟')}*\n"
-                    f"📅 تاریخ انقضا: {expires.strftime('%Y-%m-%d')}\n\n"
-                    f"از ربات لذت ببر ✨"
+                    f"📦 پلن: *{plan['name']}*\n"
+                    f"📅 تاریخ انقضا: {expires.strftime('%Y-%m-%d')} ساعت {expires.strftime('%H:%M')} (تهران)\n\n"
+                    f"ممنون که ما رو انتخاب کردید 🙏"
                 ),
                 parse_mode="Markdown",
                 reply_markup=main_menu_keyboard()
@@ -709,12 +721,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("reject_sub_"):
         if chat_id != ADMIN_CHAT_ID:
             return
-        target_id = int(data.split("_")[2])
+        target_id = int(data[len("reject_sub_"):])
         pending_receipts.pop(target_id, None)
         pending_receipt_input.discard(target_id)
 
         await query.edit_message_caption(
-            caption=query.message.caption + f"\n\n❌ *رد شد* توسط ادمین — {datetime.now().strftime('%H:%M')}",
+            caption=query.message.caption + f"\n\n❌ *رد شد* توسط ادمین — {now_tehran().strftime('%H:%M')}",
             parse_mode="Markdown"
         )
         try:
@@ -940,7 +952,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("sub_manage_"):
-        target_id = int(data.split("_")[2])
+        target_id = int(data[len("reject_sub_"):])
         info      = users_db.get(target_id, {"name": str(target_id)})
         sub_text  = subscription_status_text(target_id)
         plan_keyboard = []
@@ -965,9 +977,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         plan      = subscription_plans.get(plan_id, {})
         current   = user_subscriptions.get(target_id, {})
         # اگه اشتراک فعال دارن، اضافه کن؛ وگرنه از الان
-        base      = current.get("expires", datetime.now())
-        if base < datetime.now():
-            base = datetime.now()
+        base      = current.get("expires", now_tehran())
+        if base < now_tehran():
+            base = now_tehran()
         expires   = base + timedelta(days=plan.get("days", 30))
         user_subscriptions[target_id] = {"plan": plan_id, "expires": expires}
         info = users_db.get(target_id, {"name": str(target_id)})
@@ -980,8 +992,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=target_id,
                 text=(f"🎉 *اشتراک شما فعال شد!*\n\n"
-                      f"📦 پلن: *{plan.get('name','؟')}*\n"
-                      f"📅 انقضا: {expires.strftime('%Y-%m-%d')}"),
+                      f"📦 پلن: *{plan['name']}*\n"
+                      f"📅 انقضا: {expires.strftime('%Y-%m-%d')} ساعت {expires.strftime('%H:%M')} (تهران)\n\n"
+                      f"ممنون که ما رو انتخاب کردید 🙏"),
                 parse_mode="Markdown"
             )
         except Exception:
@@ -1017,6 +1030,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 برگشت", callback_data="back")]]))
         return
 
+    # ── تنظیم شماره کارت ────────────────────
+    if data == "set_card":
+        if chat_id != ADMIN_CHAT_ID:
+            return
+        await query.message.reply_text(
+            "💳 *تنظیم اطلاعات کارت بانکی*\n\n"
+            f"شماره فعلی: `{bot_config['card_number']}`\n"
+            f"نام فعلی: {bot_config['card_owner']}\n\n"
+            "شماره کارت جدید رو بفرست (فقط اعداد، مثلاً `6037991312345678`):\n"
+            "یا بنویس /cancel برای انصراف",
+            parse_mode="Markdown"
+        )
+        context.bot_data["pending_card"] = "number"
+        return
+
     # ── خاموش/روشن ربات ─────────────────────
     if data == "toggle_bot":
         bot_state["active"] = not bot_state["active"]
@@ -1042,6 +1070,33 @@ async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = update.message.text
+
+    # ─── تنظیم شماره کارت ────────────────────
+    pending_card = context.bot_data.get("pending_card")
+    if pending_card == "number":
+        digits = text.strip().replace("-", "").replace(" ", "")
+        if not digits.isdigit() or len(digits) not in (16,):
+            await update.message.reply_text("❌ شماره کارت باید ۱۶ رقم باشه. دوباره بفرست:")
+            return
+        formatted = "-".join([digits[i:i+4] for i in range(0, 16, 4)])
+        bot_config["card_number"] = formatted
+        context.bot_data["pending_card"] = "owner"
+        await update.message.reply_text(
+            f"✅ شماره کارت ذخیره شد: `{formatted}`\n\nحالا نام صاحب کارت رو بفرست:",
+            parse_mode="Markdown"
+        )
+        return
+    if pending_card == "owner":
+        bot_config["card_owner"] = text.strip()
+        context.bot_data.pop("pending_card", None)
+        await update.message.reply_text(
+            f"✅ اطلاعات کارت بروز شد!\n\n"
+            f"💳 شماره: `{bot_config['card_number']}`\n"
+            f"👤 نام: {bot_config['card_owner']}",
+            parse_mode="Markdown",
+            reply_markup=admin_panel_keyboard()
+        )
+        return
 
     # ─── افزودن/کاهش سکه ─────────────────────
     if ADMIN_CHAT_ID in pending_coin_add:
