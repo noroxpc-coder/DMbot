@@ -902,16 +902,32 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_chat_id == ADMIN_CHAT_ID:
             return
         tokens = user_bot_tokens.get(user_chat_id, [])
+        has_sub = has_active_subscription(user_chat_id)
+
         if not tokens:
+            if has_sub:
+                # اشتراک داره ولی هنوز توکن نگرفته — باید از ادمین بخواد
+                msg = (
+                    "🤖 *ربات من*\n\n"
+                    "✅ اشتراک شما فعال است.\n\n"
+                    "برای دریافت توکن ربات‌سازی، به ادمین پیام بده\n"
+                    "و درخواست توکن کن."
+                )
+            else:
+                # اشتراک نداره
+                msg = (
+                    "🤖 *ربات من*\n\n"
+                    "شما هنوز توکنی دریافت نکرده‌اید.\n\n"
+                    "برای دریافت توکن ربات‌سازی، ابتدا اشتراک خریداری کنید\n"
+                    "و سپس از ادمین درخواست توکن کنید."
+                )
             await query.edit_message_text(
-                "🤖 *ربات من*\n\n"
-                "شما هنوز توکنی دریافت نکرده‌اید.\n\n"
-                "برای دریافت توکن ربات‌سازی، اشتراک خریداری کنید\n"
-                "و از ادمین درخواست توکن کنید.",
+                msg,
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🛒 خرید اشتراک", callback_data="show_plans")],
-                    [InlineKeyboardButton("🔙 برگشت",        callback_data="back_main")],
+                    [InlineKeyboardButton("📨 پیام به ادمین", callback_data="goto_send")],
+                    [InlineKeyboardButton("🛒 خرید اشتراک",  callback_data="show_plans")],
+                    [InlineKeyboardButton("🔙 برگشت",         callback_data="back_main")],
                 ])
             )
             return
@@ -954,10 +970,43 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_chat_id = query.from_user.id
         if user_chat_id == ADMIN_CHAT_ID:
             return
-        text = "🛒 *خرید اشتراک*\n\n"
+        # اگه قبلاً توی فرآیند خرید بود، پاکش کن
+        pending_receipt_input.discard(user_chat_id)
+        pending_receipts.pop(user_chat_id, None)
+
+        text = (
+            "🛒 *خرید اشتراک*\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+
+            "✨ *با خرید اشتراک به این امکانات دسترسی داری:*\n\n"
+
+            "🤖 *ربات اختصاصی*\n"
+            "   یه ربات تلگرامی کاملاً مخصوص خودت بساز\n"
+            "   و زیر برند شخصی‌ات استفاده کن\n\n"
+
+            "🔑 *توکن ربات‌سازی*\n"
+            "   بعد از فعال‌سازی اشتراک، یه توکن یکتا\n"
+            "   دریافت می‌کنی و ربات رو با یه کلیک ثبت می‌کنی\n\n"
+
+            "📨 *ارسال پیام اولویت‌دار*\n"
+            "   پیام‌هات با اولویت ویژه 🟡 و فوری 🔴\n"
+            "   سریع‌تر بررسی و پاسخ داده میشه\n\n"
+
+            "💰 *سکه رایگان*\n"
+            "   با هر اشتراک سکه هدیه برای استفاده\n"
+            "   از قابلیت‌های پریمیوم ربات دریافت می‌کنی\n\n"
+
+            "⭐ *نشان اشتراک فعال*\n"
+            "   پیام‌هات با برچسب اشتراک‌دار نمایش داده\n"
+            "   میشه — اولویت بیشتر، توجه بیشتر\n\n"
+
+            "━━━━━━━━━━━━━━━━━━\n"
+            "📦 *پلن‌های موجود:*\n\n"
+        )
         for pid, plan in subscription_plans.items():
             text += f"⭐ *{plan['name']}* — {plan['price']}\n📅 {plan['description']}\n\n"
-        text += "یه پلن انتخاب کن:"
+
+        text += "👇 یه پلن انتخاب کن و شروع کن:"
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=plans_keyboard())
         return
 
@@ -977,16 +1026,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🔙 برگشت به پلن‌ها",           callback_data="show_plans")],
         ]
         await query.edit_message_text(
-            f"💳 *اطلاعات پرداخت*\n\n"
+            f"💳 *اطلاعات پرداخت*\n"
+            f"━━━━━━━━━━━━━━━━\n\n"
             f"📦 پلن انتخابی: *{plan['name']}*\n"
             f"💰 مبلغ: *{plan['price']}*\n"
-            f"📅 مدت: {plan['days']} روز\n\n"
+            f"📅 مدت اشتراک: {plan['days']} روز\n\n"
             f"━━━━━━━━━━━━━━━━\n"
-            f"💳 شماره کارت:\n`{bot_config["card_number"]}`\n"
-            f"👤 به نام: *{bot_config["card_owner"]}*\n"
+            f"💳 شماره کارت:\n`{bot_config['card_number']}`\n"
+            f"👤 به نام: *{bot_config['card_owner']}*\n"
             f"━━━━━━━━━━━━━━━━\n\n"
-            f"بعد از پرداخت، *تصویر رسید* رو اینجا ارسال کن 👇\n"
-            f"(ادمین بررسی و اشتراکت رو فعال می‌کنه)",
+            f"🤖 *بعد از فعال‌سازی اشتراک:*\n"
+            f"یه توکن اختصاصی دریافت می‌کنی که باهاش\n"
+            f"می‌تونی ربات تلگرامی شخصی خودت رو بسازی!\n\n"
+            f"📸 بعد از پرداخت، *تصویر رسید* رو اینجا ارسال کن 👇\n"
+            f"_(ادمین بررسی و اشتراکت رو فعال می‌کنه)_",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 انصراف", callback_data="show_plans")]])
         )
@@ -1004,7 +1057,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("approve_sub_"):
         if chat_id != ADMIN_CHAT_ID:
             return
-        # approve_sub_{chat_id}::{plan_id}  — با :: جدا شده تا باگ split نداشته باشه
+        # approve_sub_{chat_id}::{plan_id}
         payload   = data[len("approve_sub_"):]
         target_id_str, plan_id = payload.split("::", 1)
         target_id = int(target_id_str)
@@ -1014,16 +1067,28 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending_receipts.pop(target_id, None)
         pending_receipt_input.discard(target_id)
 
-        await query.edit_message_caption(
-            caption=query.message.caption + f"\n\n✅ *تایید شد* توسط ادمین — {now_tehran().strftime('%H:%M')}",
-            parse_mode="Markdown"
-        )
+        # آپدیت کپشن پیام رسید (هم photo هم document پشتیبانی میشه)
+        approved_suffix = f"\n\n✅ *تایید شد* توسط ادمین — {now_tehran().strftime('%H:%M')}"
+        try:
+            if query.message.caption is not None:
+                await query.edit_message_caption(
+                    caption=query.message.caption + approved_suffix,
+                    parse_mode="Markdown"
+                )
+            else:
+                await query.edit_message_text(
+                    text=(query.message.text or "") + approved_suffix,
+                    parse_mode="Markdown"
+                )
+        except Exception:
+            await query.answer("✅ اشتراک تایید شد.")
+
         try:
             await context.bot.send_message(
                 chat_id=target_id,
                 text=(
                     f"🎉 *اشتراک شما فعال شد!*\n\n"
-                    f"📦 پلن: *{plan['name']}*\n"
+                    f"📦 پلن: *{plan.get('name','؟')}*\n"
                     f"📅 تاریخ انقضا: {expires.strftime('%Y-%m-%d')} ساعت {expires.strftime('%H:%M')} (تهران)\n\n"
                     f"ممنون که ما رو انتخاب کردید 🙏"
                 ),
@@ -1042,10 +1107,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending_receipts.pop(target_id, None)
         pending_receipt_input.discard(target_id)
 
-        await query.edit_message_caption(
-            caption=query.message.caption + f"\n\n❌ *رد شد* توسط ادمین — {now_tehran().strftime('%H:%M')}",
-            parse_mode="Markdown"
-        )
+        rejected_suffix = f"\n\n❌ *رد شد* توسط ادمین — {now_tehran().strftime('%H:%M')}"
+        try:
+            if query.message.caption is not None:
+                await query.edit_message_caption(
+                    caption=query.message.caption + rejected_suffix,
+                    parse_mode="Markdown"
+                )
+            else:
+                await query.edit_message_text(
+                    text=(query.message.text or "") + rejected_suffix,
+                    parse_mode="Markdown"
+                )
+        except Exception:
+            await query.answer("❌ رسید رد شد.")
+
         try:
             await context.bot.send_message(
                 chat_id=target_id,
@@ -1276,14 +1352,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("sub_manage_"):
-        target_id = int(data[len("reject_sub_"):])
+        target_id = int(data[len("sub_manage_"):])
         info      = users_db.get(target_id, {"name": str(target_id)})
         sub_text  = subscription_status_text(target_id)
         plan_keyboard = []
         for pid, plan in subscription_plans.items():
             plan_keyboard.append([InlineKeyboardButton(
                 f"➕ اضافه کن: {plan['name']} ({plan['days']} روز)",
-                callback_data=f"admin_add_sub_{target_id}_{pid}"
+                callback_data=f"admin_add_sub_{target_id}__{pid}"
             )])
         plan_keyboard.append([InlineKeyboardButton("🗑 لغو اشتراک", callback_data=f"admin_del_sub_{target_id}")])
         plan_keyboard.append([InlineKeyboardButton("🔙 برگشت",      callback_data="manage_subs")])
@@ -1295,9 +1371,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("admin_add_sub_"):
-        parts     = data.split("_")
-        target_id = int(parts[3])
-        plan_id   = parts[4]
+        # فرمت: admin_add_sub_{target_id}__{plan_id}  (دو آندرلاین بین id و plan)
+        payload   = data[len("admin_add_sub_"):]
+        target_id_str, plan_id = payload.split("__", 1)
+        target_id = int(target_id_str)
         plan      = subscription_plans.get(plan_id, {})
         current   = user_subscriptions.get(target_id, {})
         # اگه اشتراک فعال دارن، اضافه کن؛ وگرنه از الان
@@ -1326,7 +1403,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("admin_del_sub_"):
-        target_id = int(data.split("_")[3])
+        target_id = int(data[len("admin_del_sub_"):])
         user_subscriptions.pop(target_id, None)
         info = users_db.get(target_id, {"name": str(target_id)})
         await query.message.reply_text(f"🗑 اشتراک *{info['name']}* لغو شد.", parse_mode="Markdown")
