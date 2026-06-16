@@ -167,11 +167,12 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.message.text:
         context.user_data["pending_text"] = update.message.text
+        context.user_data["pending_msg_id"] = update.message.message_id
         await update.message.reply_text(
             "📨 پیامت آماده ارسال شد!\n\nبا چه اولویتی ارسال شه?\n\n🟢 *عادی* — رایگان\n🟡 *ویژه* — ۱۰ سکه\n🔴 *فوری* — ۳۰ سکه",
             parse_mode="Markdown", reply_markup=priority_keyboard(uid)); return
 
-    # ارسال فایل/مالتی مدیا بدون اولویت (مستقیم) + ۱ سکه پاداش
+    # ارسال مستقیم فایل/مالتی مدیا بدون اولویت متنی
     await send_user_message(context, uid, user, priority="normal", text=None, original_message=update.message, confirm_target=update.message)
 
 
@@ -187,15 +188,19 @@ async def send_user_message(context, uid, user, priority="normal", text=None, or
         f"📩 *پیام جدید*{priority_tag}\n👤 نام: {user.full_name}\n🆔 یوزرنیم: @{user.username or 'ندارد'}\n🔢 Chat ID: `{uid}`\n{'─'*25}"
     )
     await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=sender_info, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    user_orig_msg_id = context.user_data.get("pending_msg_id") if original_message is None else original_message.message_id
+
     if text is not None:
         fwd = await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=text)
     elif is_anonymous:
         fwd = await context.bot.copy_message(chat_id=ADMIN_CHAT_ID, from_chat_id=uid, message_id=original_message.message_id)
     else:
         fwd = await original_message.forward(chat_id=ADMIN_CHAT_ID)
-    message_map[f"reply_{uid}"] = fwd.message_id
     
-    # کسر سکه برای اولویت‌های بالا یا افزودن پاداش برای پیام عادی
+    # ساخت ساختار تاپل برای ذخیره شناسه پیام ادمین و شناسه واقعی پیام کاربر
+    message_map[f"reply_{uid}"] = (fwd.message_id, user_orig_msg_id)
+    
     if level["cost"] > 0: 
         new_coins = add_coins(uid, -level["cost"], f"ارسال پیام با اولویت {level['title']}")
     else:
@@ -473,14 +478,29 @@ async def handle_admin_media_and_text(update: Update, context: ContextTypes.DEFA
     if ADMIN_CHAT_ID in reply_to:
         target_id = reply_to.pop(ADMIN_CHAT_ID)
         try:
-            await context.bot.send_message(chat_id=target_id, text=f"📨 *پاسخ ارشیا:*", parse_mode="Markdown")
-            await context.bot.copy_message(chat_id=target_id, from_chat_id=ADMIN_CHAT_ID, message_id=update.message.message_id)
+            mapped_data = message_map.get(f"reply_{target_id}")
+            reply_to_user_msg_id = None
+            admin_msg_id_in_panel = None
             
-            reply_msg_id = message_map.get(f"reply_{target_id}")
-            if reply_msg_id:
-                await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text="✅ پاسخ شما با موفقیت ارسال شد.", reply_to_message_id=reply_msg_id)
+            if isinstance(mapped_data, tuple):
+                admin_msg_id_in_panel, reply_to_user_msg_id = mapped_data
+            elif isinstance(mapped_data, int):
+                admin_msg_id_in_panel = mapped_data
+
+            # کپی تمیز پیام ارشیا به چت کاربر به همراه قابلیت ریپلای روی آیدی پیام ثبت شده کاربر
+            await context.bot.copy_message(
+                chat_id=target_id, 
+                from_chat_id=ADMIN_CHAT_ID, 
+                message_id=update.message.message_id,
+                reply_to_message_id=reply_to_user_msg_id
+            )
+            
+            # ارسال تاییدیه روی چت خودتان (ریپلای روی پیامی که توی پنل اومده بود)
+            if admin_msg_id_in_panel:
+                await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text="✅ پاسخ شما ارسال شد.", reply_to_message_id=admin_msg_id_in_panel)
             else:
                 await update.message.reply_text("✅ پاسخ شما با موفقیت ارسال شد.")
+                
         except Exception as e:
             await update.message.reply_text(f"❌ ارسال پاسخ ناموفق بود.\nخطا: {e}")
 
