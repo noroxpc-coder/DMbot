@@ -1,4 +1,3 @@
-cat > /mnt/user-data/outputs/bot_optimized.py << 'PYEOF'
 import logging, secrets, string
 from datetime import datetime, timedelta, timezone
 
@@ -113,22 +112,22 @@ def btn(label, data): return InlineKeyboardButton(label, callback_data=data)
 def back_btn(cb="back"): return btn("🔙 برگشت", cb)
 
 def main_menu_keyboard():
-    # ردیف اول: ارسال پیام (تمام عرض)
-    # ردیف دوم: حساب من | ربات من
-    # ردیف سوم: خرید اشتراک | تنظیمات
     return kb(
         [btn("📨 ارسال پیام به ادمین", "goto_send")],
-        [btn("👤 حساب من", "my_account"),   btn("🤖 ربات من", "my_bots")],
-        [btn("🛒 خرید اشتراک", "show_plans"), btn("⚙️ تنظیمات", "open_settings")],
+        [btn("🛒 خرید اشتراک", "show_plans")],
+        [btn("👤 حساب من", "my_account")],
+        [btn("🤖 ربات من", "my_bots")],
+        [btn("⚙️ تنظیمات", "open_settings")],
     )
 
 def mode_selection_keyboard():
-    return kb([btn("👤 با اسم (عادی)", "set_mode_normal"), btn("🕵️ ناشناس", "set_mode_anonymous")])
+    return kb([btn("👤 با اسم (عادی)", "set_mode_normal")], [btn("🕵️ ناشناس", "set_mode_anonymous")])
 
 def priority_keyboard(uid):
     return kb(
         [btn("🟢 عادی (رایگان)", "priority_normal")],
-        [btn("🟡 ویژه (۱۰ سکه)", "priority_vip"), btn("🔴 فوری (۳۰ سکه)", "priority_urgent")],
+        [btn("🟡 ویژه (۱۰ سکه)", "priority_vip")],
+        [btn("🔴 فوری (۳۰ سکه)", "priority_urgent")],
         [btn(f"💰 موجودی: {get_coins(uid)} سکه", "noop")],
     )
 
@@ -140,17 +139,18 @@ def plans_keyboard():
 def admin_panel_keyboard():
     status = "🟢 روشن" if bot_state["active"] else "🔴 خاموش"
     return kb(
-        # دسته کاربران
-        [btn("👥 لیست کاربران", "list_users"),       btn("🚫 بلاک‌شده‌ها", "list_blocked")],
-        # دسته پیام‌رسانی
-        [btn("📢 پیام همگانی", "broadcast"),          btn("👥 پیام به گروه", "send_group")],
-        # دسته محتوا
-        [btn("📊 آمار", "stats"),                     btn("🗳 نظرسنجی", "create_poll")],
-        # دسته مالی
-        [btn("💰 مدیریت سکه", "manage_coins"),        btn("🛒 اشتراک‌ها", "manage_subs")],
-        [btn("🧾 رسیدهای در انتظار", "pending_receipts_admin"), btn("💳 شماره کارت", "set_card")],
-        # دسته ربات
-        [btn("🤖 توکن ربات‌سازی", "manage_tokens"),  btn(f"⚡ ربات: {status}", "toggle_bot")],
+        [btn("👥 لیست کاربران", "list_users")],
+        [btn("🚫 لیست بلاک‌شده‌ها", "list_blocked")],
+        [btn("📊 آمار", "stats")],
+        [btn("📢 پیام همگانی", "broadcast")],
+        [btn("👥 پیام به گروه", "send_group")],
+        [btn("🗳 ساخت نظرسنجی", "create_poll")],
+        [btn("💰 مدیریت سکه", "manage_coins")],
+        [btn("🛒 مدیریت اشتراک‌ها", "manage_subs")],
+        [btn("🧾 رسیدهای در انتظار", "pending_receipts_admin")],
+        [btn("💳 تنظیم شماره کارت", "set_card")],
+        [btn("🤖 مدیریت توکن ربات‌سازی", "manage_tokens")],
+        [btn(f"⚡ وضعیت ربات: {status}", "toggle_bot")],
     )
 
 # ── هندلرهای اصلی ───────────────────────────────────────────────────────────
@@ -281,7 +281,7 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def send_user_message(context, uid, user, priority="normal", text=None, original_message=None, confirm_target=None):
-    level        = PRIORITY_LEVELS[priority]
+    level       = PRIORITY_LEVELS[priority]
     priority_tag = "\n🟡 *پیام ویژه*" if priority == "vip" else ("\n🔴 *پیام فوری* ⚡️" if priority == "urgent" else "")
     is_anonymous = user_mode[uid] == "anonymous"
     sub_tag      = " | ⭐ اشتراک فعال" if has_active_subscription(uid) else ""
@@ -301,7 +301,7 @@ async def send_user_message(context, uid, user, priority="normal", text=None, or
     message_map[f"reply_{uid}"] = fwd.message_id
     if level["cost"] > 0: add_coins(uid, -level["cost"], f"ارسال پیام با اولویت {level['title']}")
     confirm_text = "✅ پیامت دریافت شد، به زودی جواب میگیری."
-    if priority == "vip":      confirm_text = "✅ پیام *ویژه*‌ت ارسال شد! 🟡 سریع‌تر بررسی میشه."
+    if priority == "vip":    confirm_text = "✅ پیام *ویژه*‌ت ارسال شد! 🟡 سریع‌تر بررسی میشه."
     elif priority == "urgent": confirm_text = "✅ پیام *فوری*‌ت ارسال شد! 🔴 در صدر لیست قرار گرفت."
     if is_anonymous: confirm_text += " 🕵️"
     if confirm_target:
@@ -404,10 +404,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                    if has_sub else
                    "🤖 *ربات من*\n\nشما هنوز توکنی دریافت نکرده‌اید.\n\nبرای دریافت توکن ربات‌سازی، ابتدا اشتراک خریداری کنید\nو سپس از ادمین درخواست توکن کنید.")
             await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=kb(
-                [btn("📨 پیام به ادمین", "goto_send"), btn("🛒 خرید اشتراک", "show_plans")],
+                [btn("📨 پیام به ادمین", "goto_send")],
+                [btn("🛒 خرید اشتراک", "show_plans")],
                 [back_btn("back_main")])); return
-        text    = "🤖 *ربات‌های من*\n\n"
-        kb_rows = []
+        text     = "🤖 *ربات‌های من*\n\n"
+        kb_rows  = []
         for t in tokens:
             td    = bot_tokens.get(t, {})
             text += f"🔑 `{t}`\n   {'✅ فعال — @' + td.get('bot_username','؟') if td.get('used') else '⏳ استفاده نشده'}\n\n"
@@ -620,8 +621,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)); return
 
     if data.startswith("sub_manage_"):
-        target_id     = int(data[len("sub_manage_"):])
-        info          = users_db.get(target_id, {"name": str(target_id)})
+        target_id    = int(data[len("sub_manage_"):])
+        info         = users_db.get(target_id, {"name": str(target_id)})
         plan_keyboard = [[btn(f"➕ اضافه کن: {p['name']} ({p['days']} روز)", f"admin_add_sub_{target_id}__{pid}")] for pid, p in subscription_plans.items()]
         plan_keyboard += [[btn("🗑 لغو اشتراک", f"admin_del_sub_{target_id}")], [back_btn("manage_subs")]]
         await query.message.reply_text(f"👤 *{info['name']}*\n\nاشتراک فعلی: {subscription_status_text(target_id)}\n\nیه عملیات انتخاب کن:", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(plan_keyboard)); return
@@ -700,7 +701,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(
             f"🤖 *توکن‌های {info['name']}*\n\n📦 اشتراک: {subscription_status_text(target_id)}\n\n🔑 توکن‌ها:\n{token_lines}",
             parse_mode="Markdown", reply_markup=kb(
-                [btn("🆕 صدور توکن جدید", f"issue_token_{target_id}"), btn("👁 پروفایل کامل", f"full_profile_{target_id}")],
+                [btn("🆕 صدور توکن جدید", f"issue_token_{target_id}")],
+                [btn("👁 پروفایل کامل", f"full_profile_{target_id}")],
                 [back_btn("manage_tokens")])); return
 
     if data.startswith("issue_token_"):
@@ -710,7 +712,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(
                 f"⚠️ *{info['name']}* اشتراک فعال ندارد!\n\nآیا مطمئنی میخوای توکن بدی?",
                 parse_mode="Markdown", reply_markup=kb(
-                    [btn("✅ بله، صادر کن", f"confirm_issue_{target_id}"), btn("❌ خیر", f"token_for_{target_id}")])); return
+                    [btn("✅ بله، صادر کن", f"confirm_issue_{target_id}")],
+                    [btn("❌ خیر", f"token_for_{target_id}")])); return
         token = create_bot_token(target_id)
         await query.message.reply_text(
             f"✅ *توکن جدید صادر شد!*\n\n👤 کاربر: {info['name']} | `{target_id}`\n🔑 توکن: `{token}`\n⏰ زمان: {fmt_dt()}\n\n📤 ارسال توکن به کاربر...",
@@ -751,8 +754,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(
             get_full_profile_text(target_id), parse_mode="Markdown",
             reply_markup=kb(
-                [btn("↩️ پاسخ", f"reply_{target_id}"),    btn("📝 یادداشت", f"set_note_{target_id}")],
-                [btn("🤖 توکن جدید", f"issue_token_{target_id}"), btn("🚫 بلاک" if target_id not in blocked_users else "✅ آنبلاک", f"{'block' if target_id not in blocked_users else 'unblock'}_{target_id}")],
+                [btn("↩️ پاسخ", f"reply_{target_id}")],
+                [btn("📝 یادداشت", f"set_note_{target_id}")],
+                [btn("🤖 توکن جدید", f"issue_token_{target_id}")],
+                [btn("🚫 بلاک" if target_id not in blocked_users else "✅ آنبلاک",
+                     f"{'block' if target_id not in blocked_users else 'unblock'}_{target_id}")],
                 [back_btn("list_users")])); return
 
     if data.startswith("set_note_"):
@@ -834,7 +840,8 @@ async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(
                     f"🗳 *پیش‌نمایش نظرسنجی:*\n\n❓ {info['question']}\n\n{preview}\n\nکجا ارسال شه?",
                     parse_mode="Markdown", reply_markup=kb(
-                        [btn("👥 ارسال به همه کاربران", "poll_target_all"), btn("👥 ارسال به یک گروه", "poll_target_group")]))
+                        [btn("👥 ارسال به همه کاربران", "poll_target_all")],
+                        [btn("👥 ارسال به یک گروه", "poll_target_group")]))
             else:
                 info["options"].append(text.strip())
                 await update.message.reply_text(f"✅ گزینه «{text.strip()}» اضافه شد. ({len(info['options'])} گزینه)\n\nگزینه بعدی یا بنویس *تمام*", parse_mode="Markdown")
