@@ -105,8 +105,7 @@ def use_bot_token(token_str, bot_username):
     td.update({"used": True, "bot_username": bot_username, "used_at": fmt_dt()})
     return True, "ok"
 
-# ── کیبوردها ────────────────────────────────────────────────────────────────
-
+# ── کیبوردها ────────────────────────────────────────────────\n
 def kb(*rows): return InlineKeyboardMarkup(list(rows))
 def btn(label, data): return InlineKeyboardButton(label, callback_data=data)
 def back_btn(cb="back"): return btn("🔙 برگشت", cb)
@@ -189,7 +188,6 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_chat.id
     if uid != ADMIN_CHAT_ID: return
     
-    # ریست کردن تمام حالت‌های انتظار ادمین
     reply_to.pop(ADMIN_CHAT_ID, None)
     group_mode.pop(ADMIN_CHAT_ID, None)
     pending_poll.pop(ADMIN_CHAT_ID, None)
@@ -210,7 +208,6 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ *ربات در حال حاضر غیرفعال است.*\n\nلطفاً بعداً مراجعه کنید.", parse_mode="Markdown"); return
     update_last_seen(uid)
 
-    # دریافت رسید
     if uid in pending_receipt_input:
         if not (update.message.photo or update.message.document):
             await update.message.reply_text("📸 لطفاً *تصویر* رسید پرداخت رو ارسال کن.", parse_mode="Markdown"); return
@@ -233,7 +230,6 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ خطا در ارسال رسید. دوباره امتحان کن.")
         return
 
-    # ورود توکن ربات
     if uid in user_submitting_token:
         token_str = update.message.text.strip() if update.message.text else ""
         if not token_str:
@@ -251,7 +247,6 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✅ *توکن معتبر است!*\n\n🤖 حالا یوزرنیم ربات تلگرامی که ساختی رو بفرست:\n(مثلاً: `@MyAwesomeBot`)\n\n📌 اگه هنوز ربات نساختی از @BotFather اقدام کن.",
             parse_mode="Markdown"); return
 
-    # دریافت یوزرنیم ربات بعد از توکن
     if context.user_data.get("pending_token"):
         bot_username = update.message.text.strip() if update.message.text else ""
         if not bot_username:
@@ -302,7 +297,7 @@ async def send_user_message(context, uid, user, priority="normal", text=None, or
     if text is not None:
         fwd = await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=text)
     elif is_anonymous:
-        fwd = await original_message.copy_to(chat_id=ADMIN_CHAT_ID)
+        fwd = await context.bot.copy_message(chat_id=ADMIN_CHAT_ID, from_chat_id=uid, message_id=original_message.message_id)
     else:
         fwd = await original_message.forward(chat_id=ADMIN_CHAT_ID)
     message_map[f"reply_{uid}"] = fwd.message_id
@@ -365,7 +360,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     quid = query.from_user.id
 
-    # انتخاب حالت کاربر
     if data in ("set_mode_normal", "set_mode_anonymous"):
         if quid == ADMIN_CHAT_ID: return
         user_mode[quid] = "normal" if data == "set_mode_normal" else "anonymous"
@@ -395,7 +389,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "my_account":
         if quid == ADMIN_CHAT_ID: return
         p = ensure_profile(quid)
-        history_text = "\n".join(user_history.get(quid, [])[-5:]) or "ندارید"
+        history_text = "\n".join(user_history.get(quid, [])[-5:]) or "ndaridi"
         await query.edit_message_text(
             f"👤 *حساب من*\n\n💰 موجودی سکه: {get_coins(quid)}\n🔐 حالت ارسال: {'🕵️ ناشناس' if user_mode.get(quid)=='anonymous' else '👤 عادی'}\n"
             f"📦 اشتراک: {subscription_status_text(quid)}\n📨 تعداد پیام‌های ارسالی: {p.get('msg_count',0)}\n📅 عضویت: {p.get('join_date','؟')}\n\n"
@@ -783,18 +777,15 @@ async def handle_admin_media_and_text(update: Update, context: ContextTypes.DEFA
     uid = update.effective_chat.id
     if update.effective_chat.type != "private": return
     
-    # اگر کاربر عادی بود، به عنوان پیام جدید فورواردش کن
     if uid != ADMIN_CHAT_ID:
         await forward_message(update, context); return
 
     text = update.message.text or ""
     
-    # بررسی دستور انصراف متنی یا دستوری
     if text.strip() in ("انصراف", "/cancel"):
         await cancel_command(update, context)
         return
 
-    # یادداشت ادمین برای کاربر
     if ADMIN_CHAT_ID in pending_note_input:
         if not update.message.text:
             await update.message.reply_text("❌ یادداشت فقط باید متنی باشد."); return
@@ -808,7 +799,6 @@ async def handle_admin_media_and_text(update: Update, context: ContextTypes.DEFA
             await update.message.reply_text(f"📝 یادداشت ذخیره شد:\n{text.strip()}")
         return
 
-    # تنظیم شماره کارت
     pending_card = context.bot_data.get("pending_card")
     if pending_card == "number":
         digits = text.strip().replace("-", "").replace(" ", "")
@@ -824,7 +814,6 @@ async def handle_admin_media_and_text(update: Update, context: ContextTypes.DEFA
             f"✅ اطلاعات کارت بروز شد!\n\n💳 شماره: `{bot_config['card_number']}`\n👤 نام: {bot_config['card_owner']}",
             parse_mode="Markdown", reply_markup=admin_panel_keyboard()); return
 
-    # مدیریت سکه
     if ADMIN_CHAT_ID in pending_coin_add:
         target_id = pending_coin_add.pop(ADMIN_CHAT_ID)
         try:
@@ -844,7 +833,6 @@ async def handle_admin_media_and_text(update: Update, context: ContextTypes.DEFA
         except Exception: pass
         return
 
-    # نظرسنجی
     if ADMIN_CHAT_ID in pending_poll:
         info = pending_poll[ADMIN_CHAT_ID]
         step = info.get("step")
@@ -876,7 +864,6 @@ async def handle_admin_media_and_text(update: Update, context: ContextTypes.DEFA
             await update.message.reply_text("✅ نظرسنجی به گروه ارسال شد.\n📊 نتایج به محض پاسخ کاربران برات ارسال میشه." if success else "❌ ارسال ناموفق. مطمئن شو ربات ادمین گروهه.")
             return
 
-    # ارسال به گروه
     if group_mode.get(ADMIN_CHAT_ID) == "waiting_id":
         try:
             group_mode[ADMIN_CHAT_ID] = int(text.strip())
@@ -888,42 +875,37 @@ async def handle_admin_media_and_text(update: Update, context: ContextTypes.DEFA
     if isinstance(group_mode.get(ADMIN_CHAT_ID), int):
         group_id = group_mode.pop(ADMIN_CHAT_ID)
         try:
-            await update.message.copy_to(chat_id=group_id)
+            await context.bot.copy_message(chat_id=group_id, from_chat_id=ADMIN_CHAT_ID, message_id=update.message.message_id)
             await update.message.reply_text("✅ پیام به گروه ارسال شد!")
         except Exception as e:
             await update.message.reply_text(f"❌ خطا در ارسال:\n{str(e)}")
         return
 
-    # پیام همگانی (برودکست)
     if reply_to.get(ADMIN_CHAT_ID) == "broadcast":
         del reply_to[ADMIN_CHAT_ID]
         success = 0
         for u_id in users_db:
             if u_id not in blocked_users:
                 try:
-                    # استفاده از send_message برای پیام همگانی چون هدر دارد
                     if update.message.text:
                         await context.bot.send_message(chat_id=u_id, text=f"📢 *پیام از ادمین:*\n\n{text}", parse_mode="Markdown")
                     else:
-                        # اگر رسانه بود ابتدا یک متن می‌فرستد سپس خود رسانه را کپی می‌کند
                         await context.bot.send_message(chat_id=u_id, text=f"📢 *پیام رسانه‌ای از طرف ادمین:*", parse_mode="Markdown")
-                        await update.message.copy_to(chat_id=u_id)
+                        await context.bot.copy_message(chat_id=u_id, from_chat_id=ADMIN_CHAT_ID, message_id=update.message.message_id)
                     success += 1
                 except Exception: pass
         await update.message.reply_text(f"✅ پیام به {success} کاربر ارسال شد."); return
 
-    # 💎 بخش اصلی: پاسخ به کاربر خاص (پشتیبانی از استیکر، گیف، عکس، متن و...)
+    # 💎 بخش اصلاح شده با استفاده از copy_message بدون خطا
     if ADMIN_CHAT_ID in reply_to:
         target_id = reply_to.pop(ADMIN_CHAT_ID)
         try:
-            # ارسال پیام هدر برای اطلاع کاربر
             name = "ادمین"
             await context.bot.send_message(chat_id=target_id, text=f"📨 *پاسخ {name}:*", parse_mode="Markdown")
             
-            # کپی دقیق هر نوع پیامی که ادمین فرستاده (استیکر، گیف، وویس، متن و...) برای کاربر
-            await update.message.copy_to(chat_id=target_id)
+            # کپی کردن بدون دردسر هر نوع پیام (استیکر، گیف، عکس، ویس، متن و...) از چت ادمین به چت کاربر
+            await context.bot.copy_message(chat_id=target_id, from_chat_id=ADMIN_CHAT_ID, message_id=update.message.message_id)
             
-            # ارسال تاییدیه برای ادمین روی پیام اصلی (در صورت وجود در مپ)
             reply_msg_id = message_map.get(f"reply_{target_id}")
             if reply_msg_id:
                 await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text="✅ پاسخ شما با موفقیت ارسال شد.", reply_to_message_id=reply_msg_id)
@@ -943,7 +925,6 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(PollAnswerHandler(handle_poll_answer))
     
-    # هندلر جدید: فیلتر ALL به ما اجازه می‌دهد هر فرمتی (متن یا رسانه) از سمت ادمین یا کاربر را بگیریم
     app.add_handler(MessageHandler(filters.ALL, handle_admin_media_and_text))
     
     print("✅ ربات روشن شد و منتظر پیامه...")
