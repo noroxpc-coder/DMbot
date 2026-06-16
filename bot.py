@@ -19,27 +19,14 @@ bot_config    = {"card_number": "6037-XXXX-XXXX-XXXX", "card_owner": "نام ص�
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.WARNING)
 
-users_db              = {}
-blocked_users         = set()
-reply_to              = {}
-message_map           = {}
-group_mode            = {}
-user_mode             = {}
-user_coins            = {}
-user_history          = {}
-pending_poll          = {}
-poll_votes            = {}
-subscription_plans    = {"plan1": {"name": "اشتراک یک ماهه", "days": 30, "price": "۴۰,۰۰۰ تومان", "description": "دسترسی کامل ۳۰ روزه"}}
-user_subscriptions    = {}
-pending_receipts      = {}
-pending_receipt_input = set()
-pending_coin_add      = {}
-bot_state             = {"active": True}
-user_profiles         = {}
-bot_tokens            = {}
-user_bot_tokens       = {}
-user_submitting_token = set()
-pending_note_input    = {}
+users_db = {}; blocked_users = set(); reply_to = {}; message_map = {}
+group_mode = {}; user_mode = {}; user_coins = {}; user_history = {}
+pending_poll = {}; poll_votes = {}
+subscription_plans = {"plan1": {"name": "اشتراک یک ماهه", "days": 30, "price": "۴۰,۰۰۰ تومان", "description": "دسترسی کامل ۳۰ روزه"}}
+user_subscriptions = {}; pending_receipts = {}; pending_receipt_input = set()
+pending_coin_add = {}; bot_state = {"active": True}; user_profiles = {}
+bot_tokens = {}; user_bot_tokens = {}; user_submitting_token = set()
+pending_note_input = {}
 
 PRIORITY_LEVELS = {
     "normal": {"label": "🟢 عادی",  "emoji": "🟢", "cost": 0,  "title": "عادی"},
@@ -77,8 +64,8 @@ def update_last_seen(uid): ensure_profile(uid)["last_seen"] = fmt_dt()
 def increment_msg(uid): p = ensure_profile(uid); p["msg_count"] = p.get("msg_count", 0) + 1
 
 def get_full_profile_text(uid):
-    info  = users_db.get(uid, {"name": str(uid), "username": "ندارد"})
-    p     = ensure_profile(uid)
+    info = users_db.get(uid, {"name": str(uid), "username": "ندارد"})
+    p    = ensure_profile(uid)
     tokens = user_bot_tokens.get(uid, [])
     token_lines = "".join(
         f"  • `{t}` — {'✅ استفاده شده' if bot_tokens.get(t,{}).get('used') else '⏳ استفاده نشده'}\n"
@@ -180,8 +167,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in user_mode:
         await update.message.reply_text(
             "👋 *سلام!*\n\nقبل از شروع، نحوه نمایش هویتت رو انتخاب کن:\n\n"
-            "━━━━━━━━━━━━━━━━\n"
-            "👤 *با اسم* — ادمین اسم و پروفایلت رو میبینه\n"
+            "━━━━━━━━━━━━━━━━\n👤 *با اسم* — ادمین اسم و پروفایلت رو میبینه\n"
             "🕵️ *ناشناس* — هیچ اطلاعاتی از تو نمیفرسته\n"
             "━━━━━━━━━━━━━━━━\n\n💡 هر وقت خواستی از /settings میتونی تغییرش بدی.",
             parse_mode="Markdown", reply_markup=mode_selection_keyboard())
@@ -227,12 +213,9 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ خطایی پیش اومد. دوباره از /start شروع کن."); return
         plan      = subscription_plans.get(receipt_info["plan"], {})
         user_info = users_db.get(uid, {"name": str(uid), "username": "ندارد"})
-        keyboard  = [[
-            btn("✅ تایید و فعال‌سازی", f"approve_sub_{uid}::{receipt_info['plan']}"),
-            btn("❌ رد کردن", f"reject_sub_{uid}"),
-        ]]
-        caption = (f"🧾 *رسید پرداخت جدید*\n\n👤 کاربر: {user_info['name']}\n🆔 Chat ID: `{uid}`\n"
-                   f"📦 پلن: {plan.get('name','؟')} ({plan.get('price','؟')})\n📅 مدت: {plan.get('days','؟')} روز\n⏰ زمان: {fmt_dt()}")
+        keyboard  = [[btn("✅ تایید و فعال‌سازی", f"approve_sub_{uid}::{receipt_info['plan']}"), btn("❌ رد کردن", f"reject_sub_{uid}")]]
+        caption   = (f"🧾 *رسید پرداخت جدید*\n\n👤 کاربر: {user_info['name']}\n🆔 Chat ID: `{uid}`\n"
+                     f"📦 پلن: {plan.get('name','؟')} ({plan.get('price','؟')})\n📅 مدت: {plan.get('days','؟')} روز\n⏰ زمان: {fmt_dt()}")
         try:
             if update.message.photo:
                 await context.bot.send_photo(chat_id=ADMIN_CHAT_ID, photo=update.message.photo[-1].file_id, caption=caption, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -291,19 +274,19 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text:
         context.user_data["pending_text"] = update.message.text
         await update.message.reply_text(
-            "📨 پیامت آماده ارسال شد!\n\nبا چه اولویتی ارسال شه؟\n\n🟢 *عادی* — رایگان\n🟡 *ویژه* — ۱۰ سکه\n🔴 *فوری* — ۳۰ سکه",
+            "📨 پیامت آماده ارسال شد!\n\nبا چه اولویتی ارسال شه?\n\n🟢 *عادی* — رایگان\n🟡 *ویژه* — ۱۰ سکه\n🔴 *فوری* — ۳۰ سکه",
             parse_mode="Markdown", reply_markup=priority_keyboard(uid)); return
 
     await send_user_message(context, uid, user, priority="normal", text=None, original_message=update.message, confirm_target=update.message)
 
 
 async def send_user_message(context, uid, user, priority="normal", text=None, original_message=None, confirm_target=None):
-    level = PRIORITY_LEVELS[priority]
+    level       = PRIORITY_LEVELS[priority]
     priority_tag = "\n🟡 *پیام ویژه*" if priority == "vip" else ("\n🔴 *پیام فوری* ⚡️" if priority == "urgent" else "")
     is_anonymous = user_mode[uid] == "anonymous"
-    sub_tag  = " | ⭐ اشتراک فعال" if has_active_subscription(uid) else ""
-    keyboard = [[btn("↩️ پاسخ", f"reply_{uid}"), btn("🚫 بلاک", f"block_{uid}")]]
-    sender_info = (
+    sub_tag      = " | ⭐ اشتراک فعال" if has_active_subscription(uid) else ""
+    keyboard     = [[btn("↩️ پاسخ", f"reply_{uid}"), btn("🚫 بلاک", f"block_{uid}")]]
+    sender_info  = (
         f"📩 *پیام جدید*{priority_tag}\n🕵️ *ناشناس*{sub_tag}\n🔢 Chat ID: `{uid}`\n{'─'*25}"
         if is_anonymous else
         f"📩 *پیام جدید*{priority_tag}\n👤 نام: {user.full_name}{sub_tag}\n🆔 یوزرنیم: @{user.username or 'ندارد'}\n🔢 Chat ID: `{uid}`\n{'─'*25}"
@@ -373,9 +356,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     if data == "noop": return
 
+    quid = query.from_user.id
+
     # انتخاب حالت کاربر
     if data in ("set_mode_normal", "set_mode_anonymous"):
-        quid = query.from_user.id
         if quid == ADMIN_CHAT_ID: return
         user_mode[quid] = "normal" if data == "set_mode_normal" else "anonymous"
         label = ("✅ *حالت عادی فعال شد!*\n\n👤 اسم و پروفایلت همراه پیامت ارسال میشه.\n\nاز منوی زیر ادامه بده 👇"
@@ -384,28 +368,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(label, parse_mode="Markdown", reply_markup=main_menu_keyboard()); return
 
     if data == "back_main":
-        quid = query.from_user.id
         current = "🕵️ ناشناس" if user_mode.get(quid) == "anonymous" else "👤 عادی"
         await query.edit_message_text(
             f"🏠 *منوی اصلی*\n\nحالت ارسال: {current}\nاشتراک: {subscription_status_text(quid)}\n\nیه گزینه انتخاب کن 👇",
             parse_mode="Markdown", reply_markup=main_menu_keyboard()); return
 
     if data == "goto_send":
-        quid = query.from_user.id
         if quid == ADMIN_CHAT_ID: return
         if not bot_state["active"]:
             await query.edit_message_text("⚠️ ربات در حال حاضر غیرفعال است."); return
         await query.edit_message_text("📨 *ارسال پیام به ادمین*\n\nپیامت رو بنویس و ارسال کن 👇\n\n(متن، عکس، فایل — همه پذیرفته میشه)", parse_mode="Markdown"); return
 
     if data == "open_settings":
-        quid = query.from_user.id
         if quid == ADMIN_CHAT_ID: return
         current = user_mode.get(quid)
         status_text = "🕵️ *ناشناس*" if current == "anonymous" else ("👤 *عادی*" if current == "normal" else "❓ هنوز انتخاب نشده")
         await query.edit_message_text(f"⚙️ *تنظیمات*\n\nحالت فعلی: {status_text}\n\nیه حالت انتخاب کن:", parse_mode="Markdown", reply_markup=mode_selection_keyboard()); return
 
     if data == "my_account":
-        quid = query.from_user.id
         if quid == ADMIN_CHAT_ID: return
         p = ensure_profile(quid)
         history_text = "\n".join(user_history.get(quid, [])[-5:]) or "ندارید"
@@ -416,7 +396,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown", reply_markup=kb([back_btn("back_main")])); return
 
     if data == "my_bots":
-        quid = query.from_user.id
         if quid == ADMIN_CHAT_ID: return
         tokens  = user_bot_tokens.get(quid, [])
         has_sub = has_active_subscription(quid)
@@ -428,10 +407,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [btn("📨 پیام به ادمین", "goto_send")],
                 [btn("🛒 خرید اشتراک", "show_plans")],
                 [back_btn("back_main")])); return
-        text = "🤖 *ربات‌های من*\n\n"
-        kb_rows = []
+        text     = "🤖 *ربات‌های من*\n\n"
+        kb_rows  = []
         for t in tokens:
-            td = bot_tokens.get(t, {})
+            td    = bot_tokens.get(t, {})
             text += f"🔑 `{t}`\n   {'✅ فعال — @' + td.get('bot_username','؟') if td.get('used') else '⏳ استفاده نشده'}\n\n"
         if any(not bot_tokens.get(t, {}).get("used") for t in tokens):
             kb_rows.append([btn("🔑 وارد کردن توکن", "submit_token")])
@@ -439,13 +418,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb_rows)); return
 
     if data == "submit_token":
-        quid = query.from_user.id
         if quid == ADMIN_CHAT_ID: return
         user_submitting_token.add(quid)
         await query.edit_message_text("🔑 *وارد کردن توکن ربات‌سازی*\n\nتوکنی که از ادمین دریافت کردی رو اینجا بفرست:\n(مثلاً: `BOT-A3X9K2AB`)\n\n⚠️ هر توکن فقط یک بار قابل استفاده است.", parse_mode="Markdown"); return
 
     if data == "show_plans":
-        quid = query.from_user.id
         if quid == ADMIN_CHAT_ID: return
         pending_receipt_input.discard(quid); pending_receipts.pop(quid, None)
         text = (
@@ -463,7 +440,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=plans_keyboard()); return
 
     if data.startswith("buy_"):
-        quid = query.from_user.id
         if quid == ADMIN_CHAT_ID: return
         plan_id = data[4:]; plan = subscription_plans.get(plan_id)
         if not plan: return
@@ -477,8 +453,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("approve_sub_"):
         if uid != ADMIN_CHAT_ID: return
-        payload = data[len("approve_sub_"):]
-        target_id_str, plan_id = payload.split("::", 1)
+        target_id_str, plan_id = data[len("approve_sub_"):].split("::", 1)
         target_id = int(target_id_str)
         plan      = subscription_plans.get(plan_id, {})
         expires   = now_tehran() + timedelta(days=plan.get("days", 30))
@@ -516,7 +491,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data in ("priority_normal", "priority_vip", "priority_urgent"):
-        quid = query.from_user.id
         if quid == ADMIN_CHAT_ID: return
         priority = data.split("_")[1]
         level    = PRIORITY_LEVELS[priority]
@@ -556,7 +530,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("👥 هنوز هیچ کاربری نداری."); return
         text, keyboard = "👥 *لیست کاربران:*\n\n", []
         for u_id, info in users_db.items():
-            p = ensure_profile(u_id)
+            p     = ensure_profile(u_id)
             text += f"{'🚫' if u_id in blocked_users else '✅'}{'🕵️' if user_mode.get(u_id)=='anonymous' else '👤'}{'⭐' if has_active_subscription(u_id) else ''} {info['name']} | @{info['username']} | `{u_id}` | 💰{get_coins(u_id)} | 📨{p.get('msg_count',0)}\n"
             keyboard.append([
                 btn(f"👁 {info['name']}", f"full_profile_{u_id}"),
@@ -571,17 +545,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("🚫 هیچ کاربری بلاک نشده."); return
         text, keyboard = "🚫 *کاربران بلاک‌شده:*\n\n", []
         for b_id in blocked_users:
-            info = users_db.get(b_id, {"name": str(b_id), "username": "ندارد"})
+            info  = users_db.get(b_id, {"name": str(b_id), "username": "ندارد"})
             text += f"🚫 {info['name']} | @{info['username']} | `{b_id}`\n"
             keyboard.append([btn(f"✅ آنبلاک {info['name']}", f"unblock_{b_id}")])
         keyboard.append([back_btn()])
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)); return
 
     if data == "stats":
-        total   = len(users_db)
-        blocked = len(blocked_users)
-        anon    = sum(1 for u_id in users_db if user_mode.get(u_id) == "anonymous")
-        normal  = sum(1 for u_id in users_db if user_mode.get(u_id) == "normal")
+        total    = len(users_db)
+        blocked  = len(blocked_users)
+        anon     = sum(1 for u_id in users_db if user_mode.get(u_id) == "anonymous")
+        normal   = sum(1 for u_id in users_db if user_mode.get(u_id) == "normal")
         with_sub = sum(1 for u_id in users_db if has_active_subscription(u_id))
         await query.message.reply_text(
             f"📊 *آمار ربات*\n\n👥 کل کاربران: {total}\n✅ فعال: {total-blocked}\n🚫 بلاک‌شده: {blocked}\n⭐ دارای اشتراک: {with_sub}\n"
@@ -622,8 +596,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("👥 هنوز هیچ کاربری نداری."); return
         text, keyboard = "💰 *مدیریت سکه کاربران*\n\n", []
         for u_id, info in users_db.items():
-            coins = get_coins(u_id)
-            text += f"👤 {info['name']} | `{u_id}` | 💰 {coins}\n"
+            coins  = get_coins(u_id)
+            text  += f"👤 {info['name']} | `{u_id}` | 💰 {coins}\n"
             keyboard.append([btn(f"💰 {info['name']} ({coins} سکه)", f"addcoin_{u_id}")])
         keyboard.append([back_btn()])
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)); return
@@ -647,15 +621,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)); return
 
     if data.startswith("sub_manage_"):
-        target_id = int(data[len("sub_manage_"):])
-        info = users_db.get(target_id, {"name": str(target_id)})
+        target_id    = int(data[len("sub_manage_"):])
+        info         = users_db.get(target_id, {"name": str(target_id)})
         plan_keyboard = [[btn(f"➕ اضافه کن: {p['name']} ({p['days']} روز)", f"admin_add_sub_{target_id}__{pid}")] for pid, p in subscription_plans.items()]
         plan_keyboard += [[btn("🗑 لغو اشتراک", f"admin_del_sub_{target_id}")], [back_btn("manage_subs")]]
         await query.message.reply_text(f"👤 *{info['name']}*\n\nاشتراک فعلی: {subscription_status_text(target_id)}\n\nیه عملیات انتخاب کن:", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(plan_keyboard)); return
 
     if data.startswith("admin_add_sub_"):
-        payload = data[len("admin_add_sub_"):]
-        target_id_str, plan_id = payload.split("__", 1)
+        target_id_str, plan_id = data[len("admin_add_sub_"):].split("__", 1)
         target_id = int(target_id_str)
         plan      = subscription_plans.get(plan_id, {})
         current   = user_subscriptions.get(target_id, {})
@@ -687,7 +660,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("✅ رسید در انتظاری وجود نداره."); return
         text = "🧾 *رسیدهای در انتظار تایید:*\n\n"
         for u_id, receipt in pending_receipts.items():
-            info = users_db.get(u_id, {"name": str(u_id)})
+            info  = users_db.get(u_id, {"name": str(u_id)})
             text += f"👤 {info['name']} | `{u_id}` | پلن: {subscription_plans.get(receipt['plan'],{}).get('name','؟')}\n"
         text += "\n⚠️ رسیدها به صورت تصویر ارسال میشن و باید از روی تصویر تایید/رد کنی."
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=kb([back_btn()])); return
@@ -718,9 +691,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)); return
 
     if data.startswith("token_for_"):
-        target_id = int(data[len("token_for_"):])
-        info   = users_db.get(target_id, {"name": str(target_id)})
-        tokens = user_bot_tokens.get(target_id, [])
+        target_id   = int(data[len("token_for_"):])
+        info        = users_db.get(target_id, {"name": str(target_id)})
+        tokens      = user_bot_tokens.get(target_id, [])
         token_lines = "".join(
             f"  {'✅' if bot_tokens.get(t,{}).get('used') else '⏳'} `{t}` — {'@' + bot_tokens.get(t,{}).get('bot_username','؟') if bot_tokens.get(t,{}).get('used') else 'استفاده نشده'}\n"
             for t in tokens
@@ -734,10 +707,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("issue_token_"):
         target_id = int(data[len("issue_token_"):])
-        info = users_db.get(target_id, {"name": str(target_id)})
+        info      = users_db.get(target_id, {"name": str(target_id)})
         if not has_active_subscription(target_id):
             await query.message.reply_text(
-                f"⚠️ *{info['name']}* اشتراک فعال ندارد!\n\nآیا مطمئنی میخوای توکن بدی؟",
+                f"⚠️ *{info['name']}* اشتراک فعال ندارد!\n\nآیا مطمئنی میخوای توکن بدی?",
                 parse_mode="Markdown", reply_markup=kb(
                     [btn("✅ بله، صادر کن", f"confirm_issue_{target_id}")],
                     [btn("❌ خیر", f"token_for_{target_id}")])); return
@@ -789,7 +762,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [back_btn("list_users")])); return
 
     if data.startswith("set_note_"):
-        target_id = int(data[len("set_note_"):])
+        target_id    = int(data[len("set_note_"):])
         pending_note_input[ADMIN_CHAT_ID] = target_id
         info         = users_db.get(target_id, {"name": str(target_id)})
         current_note = user_profiles.get(target_id, {}).get("admin_note") or "—"
@@ -823,10 +796,9 @@ async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         digits = text.strip().replace("-", "").replace(" ", "")
         if not digits.isdigit() or len(digits) != 16:
             await update.message.reply_text("❌ شماره کارت باید ۱۶ رقم باشه. دوباره بفرست:"); return
-        formatted = "-".join([digits[i:i+4] for i in range(0, 16, 4)])
-        bot_config["card_number"] = formatted
+        bot_config["card_number"] = "-".join([digits[i:i+4] for i in range(0, 16, 4)])
         context.bot_data["pending_card"] = "owner"
-        await update.message.reply_text(f"✅ شماره کارت ذخیره شد: `{formatted}`\n\nحالا نام صاحب کارت رو بفرست:", parse_mode="Markdown"); return
+        await update.message.reply_text(f"✅ شماره کارت ذخیره شد: `{bot_config['card_number']}`\n\nحالا نام صاحب کارت رو بفرست:", parse_mode="Markdown"); return
     if pending_card == "owner":
         bot_config["card_owner"] = text.strip()
         context.bot_data.pop("pending_card", None)
@@ -841,8 +813,8 @@ async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             await update.message.reply_text("❌ فقط عدد بفرست (مثلاً 20 یا -10)."); return
         new_balance = add_coins(target_id, amount, "تغییر دستی توسط ادمین")
-        info = users_db.get(target_id, {"name": str(target_id)})
-        sign = "+" if amount >= 0 else ""
+        info  = users_db.get(target_id, {"name": str(target_id)})
+        sign  = "+" if amount >= 0 else ""
         await update.message.reply_text(
             f"✅ موجودی *{info['name']}* بروز شد.\nتغییر: {sign}{amount} سکه\nموجودی جدید: 💰 {new_balance}",
             parse_mode="Markdown")
