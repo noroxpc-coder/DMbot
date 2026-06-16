@@ -13,8 +13,8 @@ def fmt_dt(dt=None): return (dt or now_tehran()).strftime("%Y-%m-%d | %H:%M") + 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, CallbackQueryHandler, PollAnswerHandler, filters, ContextTypes
 
-BOT_TOKEN     = "8977895133:AAHdVjMrr-9-ceXXviV5Zt5I_vP93HxQqZY"
-ADMIN_CHAT_ID = 1143598012
+BOT_TOKEN      = "8977895133:AAHdVjMrr-9-ceXXviV5Zt5I_vP93HxQqZY"
+OWNER_CHAT_ID  = 1143598012  # ارشیا (مالک اصلی و ادمین ارشد)
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.WARNING)
 
@@ -22,14 +22,37 @@ users_db = {}; blocked_users = set(); reply_to = {}; message_map = {}
 group_mode = {}; user_mode = {}; user_coins = {}; user_history = {}
 pending_poll = {}; poll_votes = {}
 bot_state = {"active": True}; user_profiles = {}
-pending_coin_add = {}; pending_note_input = {}
+pending_coin_add = {}; pending_note_input = {}; pending_admin_add = {}
+
+# دیتابیس ادمین‌ها و دسترسی‌ها
+# ساختار: { admin_id: { "name": str, "permissions": set([...]) } }
+admins_db = {}
+
+# لیست کل دسترسی‌های قابل تنظیم
+ALL_PERMISSIONS = {
+    "can_reply": "✉️ پاسخ به پیام‌ها",
+    "can_manage_coins": "💰 مدیریت سکه",
+    "can_broadcast": "📢 پیام همگانی",
+    "can_manage_users": "👥 مدیریت کاربران"
+}
 
 PRIORITY_LEVELS = {
     "normal": {"label": "🟢 عادی",  "emoji": "🟢", "cost": 0,   "title": "عادی"},
     "urgent": {"label": "🔴 فوری",  "emoji": "🔴", "cost": 100, "title": "فوری"},
 }
 
-# ── توابع کمکی ──────────────────────────────────────────────────────────────
+# ── توابع کمکی دسترسی ────────────────────────────────────────────────────────
+
+def is_admin(uid):
+    """بررسی اینکه آیا کاربر ادمین اصلی یا فرعی است"""
+    return uid == OWNER_CHAT_ID or uid in admins_db
+
+def has_perm(uid, permission):
+    """بررسی هوشمند دسترسی ادمین‌ها"""
+    if uid == OWNER_CHAT_ID: return True  # مالک اصلی همه دسترسی‌ها را دارد
+    if uid in admins_db:
+        return permission in admins_db[uid]["permissions"]
+    return False
 
 def add_coins(uid, amount, reason=""):
     user_coins[uid] = user_coins.get(uid, 0) + amount
@@ -61,7 +84,7 @@ def get_full_profile_text(uid):
         f"🔐 حالت ارسال: {'🕵️ ناشناس' if user_mode.get(uid)=='anonymous' else '👤 عادی'}\n"
         f"🚫 بلاک‌شده: {'🚫 بله' if uid in blocked_users else '✅ خیر'}\n"
         f"━━━━━━━━━━━━━━━━━━\n📋 سابقه بلاک:\n{bh_text}\n"
-        f"━━━━━━━━━━━━━━━━━━\n📝 یادداشت ارشیا: {p.get('admin_note') or '—'}"
+        f"━━━━━━━━━━━━━━━━━━\n📝 یادداشت ادمین: {p.get('admin_note') or '—'}"
     )
 
 # ── کیبوردها ────────────────────────────────────────────────
@@ -86,22 +109,48 @@ def priority_keyboard(uid):
         [btn(f"💰 موجودی شما: {get_coins(uid)} سکه", "noop")],
     )
 
-def admin_panel_keyboard():
-    status = "🟢 روشن" if bot_state["active"] else "🔴 خاموش"
-    return kb(
-        [btn("👥 لیست کاربران", "list_users")],
-        [btn("📊 آمار", "stats")],
-        [btn("📢 پیام همگانی", "broadcast")],
-        [btn("💰 مدیریت سکه", "manage_coins")],
-        [btn(f"⚡ وضعیت ربات: {status}", "toggle_bot")],
-    )
+def admin_panel_keyboard(uid):
+    buttons = []
+    # منوهای پویا بر اساس سطح دسترسی ادمین فرعی یا ارشد
+    if has_perm(uid, "can_manage_users"):
+        buttons.append([btn("👥 لیست کاربران", "list_users")])
+    
+    mid_row = []
+    if has_perm(uid, "can_manage_users"): mid_row.append(btn("📊 آمار", "stats"))
+    if has_perm(uid, "can_broadcast"): mid_row.append(btn("📢 پیام همگانی", "broadcast"))
+    if mid_row: buttons.append(mid_row)
+    
+    if has_perm(uid, "can_manage_coins"):
+        buttons.append([btn("💰 مدیریت سکه", "manage_coins")])
+        
+    # بخش‌های کاملاً قفل شده و مخصوص مالک اصلی (ارشیا)
+    if uid == OWNER_CHAT_ID:
+        status = "🟢 روشن" if bot_state["active"] else "🔴 خاموش"
+        buttons.append([btn("👑 مدیریت ادمین‌ها و دسترسی‌ها", "manage_admins")])
+        buttons.append([btn(f"⚡ وضعیت ربات: {status}", "toggle_bot")])
+        
+    return InlineKeyboardMarkup(buttons)
+
+def admin_permissions_keyboard(admin_id):
+    """ساخت کیبورد هوشمند برای فعال/غیرفعال کردن تک تک دسترسی‌ها"""
+    admin_info = admins_db.get(admin_id, {"permissions": set()})
+    current_perms = admin_info["permissions"]
+    
+    rows = []
+    for perm_key, perm_label in ALL_PERMISSIONS.items():
+        status_emoji = "✅" if perm_key in current_perms else "❌"
+        rows.append([btn(f"{status_emoji} {perm_label}", f"toggleperm_{admin_id}_{perm_key}")])
+        
+    rows.append([btn("🗑 حذف کامل این ادمین", f"removeadmin_{admin_id}")])
+    rows.append([back_btn("manage_admins")])
+    return InlineKeyboardMarkup(rows)
 
 # ── هندلرها ───────────────────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user, uid = update.effective_user, update.effective_chat.id
     if update.effective_chat.type != "private": return
-    if uid == ADMIN_CHAT_ID:
+    if is_admin(uid):
         await panel(update, context); return
     if not bot_state["active"]:
         await update.message.reply_text("⛔ *ربات در حال حاضر غیرفعال است.*\n\nلطفاً بعداً مراجعه کنید.", parse_mode="Markdown"); return
@@ -110,7 +159,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in user_mode:
         await update.message.reply_text(
             "👋 *سلام!*\n\nقبل از شروع، نحوه نمایش هویتت رو انتخاب کن:\n\n"
-            "━━━━━━━━━━━━━━━━\n👤 *با اسم* — ارشیا اسم و پروفایلت رو میبینه\n"
+            "━━━━━━━━━━━━━━━━\n👤 *با اسم* — ادمین اسم و پروفایلت رو میبینه\n"
             "🕵️ *ناشناس* — هیچ اطلاعاتی از تو نمیفرسته\n"
             "━━━━━━━━━━━━━━━━\n\n💡 هر وقت خواستی از /settings میتونی تغییرش بدی.",
             parse_mode="Markdown", reply_markup=mode_selection_keyboard())
@@ -120,29 +169,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown", reply_markup=main_menu_keyboard())
 
 async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id != ADMIN_CHAT_ID: return
-    await update.message.reply_text("🎛 *پنل مدیریت ارشیا*\nیه گزینه انتخاب کن:", parse_mode="Markdown", reply_markup=admin_panel_keyboard())
+    uid = update.effective_chat.id
+    if not is_admin(uid): return
+    await update.message.reply_text("🎛 *پنل مدیریت ربات*\nیه گزینه انتخاب کن:", parse_mode="Markdown", reply_markup=admin_panel_keyboard(uid))
 
 async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_chat.id
-    if update.effective_chat.type != "private" or uid == ADMIN_CHAT_ID: return
+    if update.effective_chat.type != "private" or is_admin(uid): return
     current = user_mode.get(uid)
     status_text = "🕵️ *ناشناس* (فعال)" if current == "anonymous" else ("👤 *عادی* (فعال)" if current == "normal" else "❓ هنوز انتخاب نشده")
     await update.message.reply_text(
         f"⚙️ *تنظیمات ارسال پیام*\n\nحالت فعلی: {status_text}\n\n"
-        "━━━━━━━━━━━━━━━━\n👤 *عادی* — اسم و پروفایلت برای ارشیا نمایش داده میشه\n"
+        "━━━━━━━━━━━━━━━━\n👤 *عادی* — اسم و پروفایلت برای ادمین نمایش داده میشه\n"
         "🕵️ *ناشناس* — هیچ اطلاعاتی از تو ارسال نمیشه\n━━━━━━━━━━━━━━━━\n\nیه حالت انتخاب کن:",
         parse_mode="Markdown", reply_markup=mode_selection_keyboard())
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_chat.id
-    if uid != ADMIN_CHAT_ID: return
+    if not is_admin(uid): return
     
-    reply_to.pop(ADMIN_CHAT_ID, None)
-    group_mode.pop(ADMIN_CHAT_ID, None)
-    pending_poll.pop(ADMIN_CHAT_ID, None)
-    pending_coin_add.pop(ADMIN_CHAT_ID, None)
-    pending_note_input.pop(ADMIN_CHAT_ID, None)
+    reply_to.pop(uid, None)
+    group_mode.pop(uid, None)
+    pending_poll.pop(uid, None)
+    pending_coin_add.pop(uid, None)
+    pending_note_input.pop(uid, None)
+    pending_admin_add.pop(uid, None)
     
     await update.message.reply_text("🔄 *عملیات فعلی لغو شد و وضعیت به حالت عادی برگشت.*", parse_mode="Markdown")
 
@@ -150,7 +201,7 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user, uid = update.effective_user, update.effective_chat.id
-    if update.effective_chat.type != "private" or uid == ADMIN_CHAT_ID: return
+    if update.effective_chat.type != "private" or is_admin(uid): return
     if uid in blocked_users:
         await update.message.reply_text("⛔ شما مسدود شده‌اید."); return
     if not bot_state["active"]:
@@ -169,10 +220,9 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "📨 *اولویت ارسال پیام خود را انتخاب کنید:*\n\n"
             "🟢 *عادی (رایگان):* پیام شما در صف معمولی قرار می‌گیرد و به مرور زمان بررسی می‌شود.\n\n"
-            "🔴 *فوری (۱۰۰ سکه):* پیام شما با وضعیت ویژه و صدای زنگ متمایز 🔔 به دست ارشیا می‌رسد و مستقیماً بالای چتِ ادمین 📌 *سنجاق (Pin)* می‌شود تا در سریع‌ترین زمان ممکن پاسخ داده شود!",
+            "🔴 *فوری (۱۰۰ سکه):* پیام شما با وضعیت ویژه و صدای زنگ متمایز 🔔 به دست ادمین می‌رسد و مستقیماً بالای چتِ ادمین 📌 *سنجاق (Pin)* می‌شود تا در سریع‌ترین زمان ممکن پاسخ داده شود!",
             parse_mode="Markdown", reply_markup=priority_keyboard(uid)); return
 
-    # ارسال مستقیم فایل/مالتی مدیا بدون اولویت متنی به صورت عادی
     await send_user_message(context, uid, user, priority="normal", text=None, original_message=update.message, confirm_target=update.message)
 
 
@@ -180,7 +230,7 @@ async def send_user_message(context, uid, user, priority="normal", text=None, or
     level       = PRIORITY_LEVELS[priority]
     
     if priority == "urgent":
-        priority_tag = "\n🚨🚨 *[پیام بسیار فوری — ۱۰۰ سکه]* 🚨🚨\n📌 این پیام در بالای چت شما سنجاق شده است!"
+        priority_tag = "\n🚨🚨 *[پیام بسیار فوری — ۱۰۰ سکه]* 🚨🚨\n📌 این پیام در بالای چت ادمین سنجاق شده است!"
     else:
         priority_tag = "\n🟢 *پیام عادی*"
 
@@ -193,91 +243,53 @@ async def send_user_message(context, uid, user, priority="normal", text=None, or
         f"📩 *پیام جدید*{priority_tag}\n👤 نام: {user.full_name}\n🆔 یوزرنیم: @{user.username or 'ندارد'}\n🔢 Chat ID: `{uid}`\n{'─'*25}"
     )
     
-    # کارهای ویژه برای وضعیت فوری ارشیا
-    if priority == "urgent":
-        # ارسال آلارم چشمی و صوتی جداگانه پیش از پیام اصلی
-        await context.bot.send_message(
-            chat_id=ADMIN_CHAT_ID, 
-            text="🔔🔴 *🚨 توجه ارشیا! پیام بسیار فوری با کسر ۱۰۰ سکه دریافت شد! 🚨* 🔴🔔", 
-            parse_mode="Markdown", 
-            disable_notification=False
-        )
+    # ارسال آلارم و پیام به ارشیا (مالک) و تمام ادمین‌هایی که دسترسی پاسخگویی دارند
+    targets = [OWNER_CHAT_ID] + [adm_id for adm_id, adm_info in admins_db.items() if "can_reply" in adm_info["permissions"]]
 
-    info_msg = await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=sender_info, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-    
-    user_orig_msg_id = context.user_data.get("pending_msg_id") if original_message is None else original_message.message_id
-
-    # ارسال یا کپی محتوای پیام
-    if text is not None:
-        fwd = await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=text, disable_notification=(priority=="normal"))
-    elif is_anonymous:
-        fwd = await context.bot.copy_message(chat_id=ADMIN_CHAT_ID, from_chat_id=uid, message_id=original_message.message_id, disable_notification=(priority=="normal"))
-    else:
-        fwd = await original_message.forward(chat_id=ADMIN_CHAT_ID, disable_notification=(priority=="normal"))
-    
-    # سنجاق کردن خودکار پیام متنی یا رسانه ادمین در چت در صورت فوری بودن
-    if priority == "urgent":
+    for target_admin in targets:
         try:
-            await context.bot.pin_chat_message(chat_id=ADMIN_CHAT_ID, message_id=fwd.message_id, disable_notification=False)
+            if priority == "urgent":
+                await context.bot.send_message(
+                    chat_id=target_admin, 
+                    text="🔔🔴 *🚨 توجه! پیام بسیار فوری با کسر ۱۰۰ سکه دریافت شد! 🚨* 🔴🔔", 
+                    parse_mode="Markdown", 
+                    disable_notification=False
+                )
+
+            fwd_info = await context.bot.send_message(chat_id=target_admin, text=sender_info, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+            user_orig_msg_id = context.user_data.get("pending_msg_id") if original_message is None else original_message.message_id
+
+            if text is not None:
+                fwd = await context.bot.send_message(chat_id=target_admin, text=text, disable_notification=(priority=="normal"))
+            elif is_anonymous:
+                fwd = await context.bot.copy_message(chat_id=target_admin, from_chat_id=uid, message_id=original_message.message_id, disable_notification=(priority=="normal"))
+            else:
+                fwd = await original_message.forward(chat_id=target_admin, disable_notification=(priority=="normal"))
+            
+            if priority == "urgent":
+                try:
+                    await context.bot.pin_chat_message(chat_id=target_admin, message_id=fwd.message_id, disable_notification=False)
+                except Exception: pass
+
+            # ذخیره کردن نگاشت فقط برای ادمینی که پیام را دریافت کرده
+            message_map[f"reply_{uid}_{target_admin}"] = (fwd.message_id, user_orig_msg_id)
         except Exception:
             pass
-
-    message_map[f"reply_{uid}"] = (fwd.message_id, user_orig_msg_id)
     
     if level["cost"] > 0: 
         new_coins = add_coins(uid, -level["cost"], f"ارسال پیام با اولویت {level['title']}")
     else:
-        new_coins = add_coins(uid, 1, "پاداش ارسال پیام به ارشیا")
+        new_coins = add_coins(uid, 1, "پاداش ارسال پیام")
         
-    confirm_text = f"✅ پیامت دریافت شد، به زودی از ارشیا جواب میگیری.\n🎁 *۱ سکه پاداش گرفتی!*\n💰 موجودی فعلی: {new_coins} سکه"
+    confirm_text = f"✅ پیامت دریافت شد، به زودی بررسی میشه.\n🎁 *۱ سکه پاداش گرفتی!*\n💰 موجودی فعلی: {new_coins} سکه"
     if priority == "urgent": 
-        confirm_text = f"🔴 *پیام فوری شما با موفقیت ارسال شد!*\n📌 پیام شما با کسر ۱۰۰ سکه، در بالای چت ارشیا سنجاق شد تا سریعاً بررسی شود.\n💰 موجودی فعلی: {new_coins} سکه"
+        confirm_text = f"🔴 *پیام فوری شما با موفقیت ارسال شد!*\n📌 پیام شما با کسر ۱۰۰ سکه، در بالای چت ادمین سنجاق شد تا سریعاً بررسی شود.\n💰 موجودی فعلی: {new_coins} سکه"
     if is_anonymous: confirm_text += " 🕵️"
     
     if confirm_target:
         await confirm_target.reply_text(confirm_text, parse_mode="Markdown")
     else:
         await context.bot.send_message(chat_id=uid, text=confirm_text, parse_mode="Markdown")
-
-# ── نظرسنجی ─────────────────────────────────────────────────────────────────
-
-async def send_poll_to_target(context, poll_info, target):
-    question, options = poll_info["question"], poll_info["options"]
-    def _store(poll_id):
-        poll_votes[poll_id] = {"question": question, "options": {i: 0 for i in range(len(options))}, "opt_names": options, "total": 0}
-    if target == "all":
-        success = 0
-        for uid in users_db:
-            if uid not in blocked_users:
-                try:
-                    sent = await context.bot.send_poll(chat_id=uid, question=question, options=options, is_anonymous=False)
-                    _store(sent.poll.id); success += 1
-                except Exception: pass
-        return success
-    else:
-        try:
-            sent = await context.bot.send_poll(chat_id=target, question=question, options=options, is_anonymous=False)
-            _store(sent.poll.id); return 1
-        except Exception: return 0
-
-async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    answer, poll_id = update.poll_answer, update.poll_answer.poll_id
-    if poll_id not in poll_votes:
-        poll_votes[poll_id] = {"question": "نظرسنجی", "options": {}, "opt_names": [], "total": 0}
-    info = poll_votes[poll_id]
-    info["total"] = info.get("total", 0) + 1
-    for opt_id in answer.option_ids:
-        info["options"][opt_id] = info["options"].get(opt_id, 0) + 1
-    total = info["total"]
-    lines = [f"📊 *نتایج نظرسنجی* (تا این لحظه)\n❓ {info['question']}\n"]
-    for i, name in enumerate(info.get("opt_names", [])):
-        count = info["options"].get(i, 0)
-        pct   = round(count / total * 100) if total else 0
-        lines.append(f"• {name}\n  {'█'*(pct//10)}{'░'*(10-pct//10)} {pct}% ({count} نفر)")
-    lines.append(f"\n👥 مجموع شرکت‌کنندگان: {total}")
-    try:
-        await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text="\n".join(lines), parse_mode="Markdown")
-    except Exception: pass
 
 # ── هندلر دکمه‌ها ───────────────────────────────────────────────────────────
 
@@ -289,7 +301,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     quid = query.from_user.id
 
     if data in ("set_mode_normal", "set_mode_anonymous"):
-        if quid == ADMIN_CHAT_ID: return
+        if is_admin(quid): return
         user_mode[quid] = "normal" if data == "set_mode_normal" else "anonymous"
         label = ("✅ *حالت عادی فعال شد!*\n\n👤 اسم و پروفایلت همراه پیامت ارسال میشه.\n\nاز منوی زیر ادامه بده 👇"
                  if data == "set_mode_normal" else
@@ -297,24 +309,23 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(label, parse_mode="Markdown", reply_markup=main_menu_keyboard()); return
 
     if data == "back_main":
-        await query.edit_message_text(
-            f"🏠 *منوی اصلی*\n\nیه گزینه انتخاب کن 👇",
-            parse_mode="Markdown", reply_markup=main_menu_keyboard()); return
+        if is_admin(quid): return
+        await query.edit_message_text(f"🏠 *منوی اصلی*\n\nیه گزینه انتخاب کن 👇", parse_mode="Markdown", reply_markup=main_menu_keyboard()); return
 
     if data == "goto_send":
-        if quid == ADMIN_CHAT_ID: return
+        if is_admin(quid): return
         if not bot_state["active"]:
             await query.edit_message_text("⚠️ ربات در حال حاضر غیرفعال است."); return
-        await query.edit_message_text("📨 *ارسال پیام به ارشیا*\n\nپیامت رو بنویس و ارسال کن 👇\n\n(با هر پیام عادی ۱ سکه جایزه می‌گیری!)", parse_mode="Markdown"); return
+        await query.edit_message_text("📨 *ارسال پیام*\n\nپیامت رو بنویس و ارسال کن 👇\n\n(با هر پیام عادی ۱ سکه جایزه می‌گیری!)", parse_mode="Markdown"); return
 
     if data == "open_settings":
-        if quid == ADMIN_CHAT_ID: return
+        if is_admin(quid): return
         current = user_mode.get(quid)
         status_text = "🕵️ *ناشناس*" if current == "anonymous" else ("👤 *عادی*" if current == "normal" else "❓ هنوز انتخاب نشده")
         await query.edit_message_text(f"⚙️ *تنظیمات*\n\nحالت فعلی: {status_text}\n\nیه حالت انتخاب کن:", parse_mode="Markdown", reply_markup=mode_selection_keyboard()); return
 
     if data == "my_account":
-        if quid == ADMIN_CHAT_ID: return
+        if is_admin(quid): return
         p = ensure_profile(quid)
         history_text = "\n".join(user_history.get(quid, [])[-5:]) or "تاریخچه‌ای وجود ندارد"
         await query.edit_message_text(
@@ -324,7 +335,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown", reply_markup=kb([back_btn("back_main")])); return
 
     if data in ("priority_normal", "priority_urgent"):
-        if quid == ADMIN_CHAT_ID: return
+        if is_admin(quid): return
         priority = data.split("_")[1]
         level    = PRIORITY_LEVELS[priority]
         coins    = get_coins(quid)
@@ -337,28 +348,36 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("pending_text", None)
         await query.edit_message_reply_markup(reply_markup=None); return
 
-    # ── دکمه‌های ارشیا (ادمین) ──────────────────────────────────────────────────────
-    if uid != ADMIN_CHAT_ID: return
+    # ── بخش ادمین‌ها و سطوح دسترسی ──────────────────────────────────────────────────
+    if not is_admin(uid): return
 
     if data.startswith("reply_"):
+        if not has_perm(uid, "can_reply"):
+            await query.answer("❌ شما دسترسی پاسخگویی ندارید.", show_alert=True); return
         target_id = int(data.split("_")[1])
-        reply_to[ADMIN_CHAT_ID] = target_id
+        reply_to[uid] = target_id
         name = users_db.get(target_id, {}).get("name", "ناشناس") if user_mode.get(target_id) != "anonymous" else "🕵️ ناشناس"
         await query.message.reply_text(f"✍️ *در حال پاسخ به {name}*\n\nهر پیامی بفرستی براش کپی میشه.\n\n💡 برای انصراف کلمه `انصراف` یا /cancel رو بفرست.", parse_mode="Markdown"); return
 
     if data.startswith("block_"):
+        if not has_perm(uid, "can_manage_users"):
+            await query.answer("❌ شما دسترسی مدیریت کاربران را ندارید.", show_alert=True); return
         target_id = int(data.split("_")[1])
         blocked_users.add(target_id)
         ensure_profile(target_id).setdefault("block_history", []).append(f"🚫 بلاک شد — {fmt_dt()}")
         await query.message.reply_text(f"🚫 کاربر *{users_db.get(target_id, {}).get('name', target_id)}* بلاک شد.", parse_mode="Markdown"); return
 
     if data.startswith("unblock_"):
+        if not has_perm(uid, "can_manage_users"):
+            await query.answer("❌ شما دسترسی مدیریت کاربران را ندارید.", show_alert=True); return
         target_id = int(data.split("_")[1])
         blocked_users.discard(target_id)
         ensure_profile(target_id).setdefault("block_history", []).append(f"✅ آنبلاک شد — {fmt_dt()}")
         await query.message.reply_text(f"✅ کاربر *{users_db.get(target_id, {}).get('name', target_id)}* آنبلاک شد.", parse_mode="Markdown"); return
 
     if data == "list_users":
+        if not has_perm(uid, "can_manage_users"):
+            await query.answer("❌ عدم دسترسی", show_alert=True); return
         if not users_db:
             await query.message.reply_text("👥 هنوز هیچ کاربری نداری."); return
         text, keyboard = "👥 *لیست کاربران:*\n\n", []
@@ -374,6 +393,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)); return
 
     if data == "stats":
+        if not has_perm(uid, "can_manage_users"):
+            await query.answer("❌ عدم دسترسی", show_alert=True); return
         total    = len(users_db)
         blocked  = len(blocked_users)
         anon     = sum(1 for u_id in users_db if user_mode.get(u_id) == "anonymous")
@@ -385,13 +406,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown", reply_markup=kb([back_btn()])); return
 
     if data == "broadcast":
-        reply_to[ADMIN_CHAT_ID] = "broadcast"
+        if not has_perm(uid, "can_broadcast"):
+            await query.answer("❌ شما دسترسی ارسال پیام همگانی ندارید.", show_alert=True); return
+        reply_to[uid] = "broadcast"
         await query.message.reply_text("📢 پیام همگانیت رو بنویس (یا بفرست انصراف):"); return
 
     if data == "back":
-        await query.message.reply_text("🎛 *پنل مدیریت ارشیا*\nیه گزینه انتخاب کن:", parse_mode="Markdown", reply_markup=admin_panel_keyboard()); return
+        await query.message.reply_text("🎛 *پنل مدیریت*\nیه گزینه انتخاب کن:", parse_mode="Markdown", reply_markup=admin_panel_keyboard(uid)); return
 
     if data == "manage_coins":
+        if not has_perm(uid, "can_manage_coins"):
+            await query.answer("❌ عدم دسترسی", show_alert=True); return
         if not users_db:
             await query.message.reply_text("👥 هنوز هیچ کاربری نداری."); return
         text, keyboard = "💰 *مدیریت سکه کاربران*\n\n", []
@@ -403,14 +428,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)); return
 
     if data.startswith("addcoin_"):
+        if not has_perm(uid, "can_manage_coins"):
+            await query.answer("❌ عدم دسترسی", show_alert=True); return
         target_id = int(data.split("_")[1])
-        pending_coin_add[ADMIN_CHAT_ID] = target_id
+        pending_coin_add[uid] = target_id
         info = users_db.get(target_id, {"name": str(target_id)})
         await query.message.reply_text(
             f"💰 *افزودن/کاهش سکه*\n\nکاربر: {info['name']} | `{target_id}`\nموجودی فعلی: {get_coins(target_id)} سکه\n\nیه عدد بفرست (مثبت یا منفی، مثلاً `20` یا `-10`):",
             parse_mode="Markdown"); return
 
     if data.startswith("full_profile_"):
+        if not has_perm(uid, "can_manage_users"):
+            await query.answer("❌ عدم دسترسی", show_alert=True); return
         target_id = int(data[len("full_profile_"):])
         await query.message.reply_text(
             get_full_profile_text(target_id), parse_mode="Markdown",
@@ -422,27 +451,76 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [back_btn("list_users")])); return
 
     if data.startswith("set_note_"):
+        if not has_perm(uid, "can_manage_users"):
+            await query.answer("❌ عدم دسترسی", show_alert=True); return
         target_id    = int(data[len("set_note_"):])
-        pending_note_input[ADMIN_CHAT_ID] = target_id
+        pending_note_input[uid] = target_id
         info         = users_db.get(target_id, {"name": str(target_id)})
         current_note = user_profiles.get(target_id, {}).get("admin_note") or "—"
         await query.message.reply_text(
             f"📝 *یادداشت برای {info['name']}*\n\nیادداشت فعلی: {current_note}\n\nیادداشت جدید رو بنویس (یا بفرست 'حذف' تا پاک بشه):",
             parse_mode="Markdown"); return
 
+    # 👑 بخش‌های اختصاصی ارشیا (مدیریت ادمین‌ها)
+    if uid != OWNER_CHAT_ID: return
+
     if data == "toggle_bot":
         bot_state["active"] = not bot_state["active"]
         status = "🟢 روشن شد" if bot_state["active"] else "🔴 خاموش شد"
         msg    = "کاربران میتونن پیام بفرستن." if bot_state["active"] else "⛔ کاربران به هیچ چیزی دسترسی ندارن."
-        await query.message.reply_text(f"⚡ *وضعیت ربات:* {status}\n\n{msg}", parse_mode="Markdown", reply_markup=admin_panel_keyboard()); return
+        await query.message.reply_text(f"⚡ *وضعیت ربات:* {status}\n\n{msg}", parse_mode="Markdown", reply_markup=admin_panel_keyboard(uid)); return
 
-# ── هندلر جامع پیام‌های ارشیا (پشتیبانی از مولتی‌مدیا) ──────────────────────────
+    if data == "manage_admins":
+        text = "👑 *بخش هوشمند مدیریت ادمین‌ها و دسترسی‌ها*\n\n"
+        keyboard = [[btn("➕ افزودن ادمین جدید", "add_new_admin")]]
+        
+        if not admins_db:
+            text += "⚠️ در حال حاضر هیچ ادمین فرعی تعریف نشده است."
+        else:
+            text += "👥 *لیست ادمین‌های فرعی فعلی:*\n"
+            for adm_id, adm_info in admins_db.items():
+                text += f"• 👤 {adm_info['name']} (`{adm_id}`) — دارای {len(adm_info['permissions'])} دسترسی\n"
+                keyboard.append([btn(f"⚙️ تنظیم دسترسی {adm_info['name']}", f"editadmin_{adm_id}")])
+                
+        keyboard.append([back_btn()])
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)); return
+
+    if data == "add_new_admin":
+        pending_admin_add[OWNER_CHAT_ID] = True
+        await query.message.reply_text("👑 *افزودن ادمین فرعی هوشمند*\n\nلطفاً **Chat ID** یا شناسه عددی کاربر مورد نظر را ارسال کنید تا فرآیند تنظیم دسترسی آغاز شود:\n\n💡 برای انصراف دستور /cancel را بفرستید.", parse_mode="Markdown"); return
+
+    if data.startswith("editadmin_"):
+        admin_id = int(data.split("_")[1])
+        info = admins_db.get(admin_id, {"name": "ادمین"})
+        await query.edit_message_text(
+            f"⚙️ *تنظیم و ویرایش دسترسی‌های ادمین: {info['name']}*\n\nروی هر گزینه کلیک کنید تا فعال یا غیرفعال شود:",
+            parse_mode="Markdown", reply_markup=admin_permissions_keyboard(admin_id)); return
+
+    if data.startswith("toggleperm_"):
+        _, admin_id_str, perm_key = data.split("_", 2)
+        admin_id = int(admin_id_str)
+        if admin_id in admins_db:
+            perms = admins_db[admin_id]["permissions"]
+            if perm_key in perms: perms.remove(perm_key)
+            else: perms.add(perm_key)
+        await query.edit_message_reply_markup(reply_markup=admin_permissions_keyboard(admin_id)); return
+
+    if data.startswith("removeadmin_"):
+        admin_id = int(data.split("_")[1])
+        name = admins_db.pop(admin_id, {}).get("name", "ادمین")
+        await query.message.reply_text(f"🗑 ادمین فرعی *{name}* با موفقیت حذف شد و تمام دسترسی‌هایش گرفته شد.", parse_mode="Markdown")
+        # رفرش منو
+        reply_to[OWNER_CHAT_ID] = "refresh" # ترفند کوچک برای بازگشت به منو
+        await query.message.reply_text("برای دیدن لیست بروز شده روی /panel کلیک کنید."); return
+
+
+# ── هندلر جامع پیام‌های ادمین‌ها و کاربران ──────────────────────────
 
 async def handle_admin_media_and_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_chat.id
     if update.effective_chat.type != "private": return
     
-    if uid != ADMIN_CHAT_ID:
+    if not is_admin(uid):
         await forward_message(update, context); return
 
     text = update.message.text or ""
@@ -451,10 +529,28 @@ async def handle_admin_media_and_text(update: Update, context: ContextTypes.DEFA
         await cancel_command(update, context)
         return
 
-    if ADMIN_CHAT_ID in pending_note_input:
-        if not update.message.text:
-            await update.message.reply_text("❌ یادداشت فقط باید متنی باشد."); return
-        target_id = pending_note_input.pop(ADMIN_CHAT_ID)
+    # هوش منطقی اضافه کردن ادمین فرعی جدید توسط ارشیا
+    if uid == OWNER_CHAT_ID and pending_admin_add.get(OWNER_CHAT_ID):
+        pending_admin_add.pop(OWNER_CHAT_ID)
+        try:
+            target_admin_id = int(text.strip())
+        except ValueError:
+            await update.message.reply_text("❌ خطا! شناسه ادمین حتماً باید یک عدد چند رقمی (Chat ID) باشد. فرآیند لغو شد."); return
+            
+        user_info = users_db.get(target_admin_id, {"name": f"کاربر {target_admin_id}"})
+        admins_db[target_admin_id] = {
+            "name": user_info["name"],
+            "permissions": set(["can_reply"]) # به طور پیش‌فرض فقط دسترسی پاسخگویی دارد
+        }
+        await update.message.reply_text(
+            f"✅ ادمین جدید با موفقیت به سیستم اضافه شد!\n\n👤 نام: {user_info['name']}\n🔢 شناسه: `{target_admin_id}`\n\n"
+            f"حالا می‌تونی دسترسی‌هاشو تغییر بدی 👇",
+            parse_mode="Markdown", reply_markup=admin_permissions_keyboard(target_admin_id))
+        return
+
+    if pending_note_input.get(uid):
+        if not has_perm(uid, "can_manage_users"): return
+        target_id = pending_note_input.pop(uid)
         p = ensure_profile(target_id)
         if text.strip() == "حذف":
             p["admin_note"] = ""
@@ -464,13 +560,14 @@ async def handle_admin_media_and_text(update: Update, context: ContextTypes.DEFA
             await update.message.reply_text(f"📝 یادداشت ذخیره شد:\n{text.strip()}")
         return
 
-    if ADMIN_CHAT_ID in pending_coin_add:
-        target_id = pending_coin_add.pop(ADMIN_CHAT_ID)
+    if pending_coin_add.get(uid):
+        if not has_perm(uid, "can_manage_coins"): return
+        target_id = pending_coin_add.pop(uid)
         try:
             amount = int(text.strip())
         except ValueError:
             await update.message.reply_text("❌ فقط عدد بفرست (مثلاً 20 یا -10)."); return
-        new_balance = add_coins(target_id, amount, "تغییر دستی توسط ارشیا")
+        new_balance = add_coins(target_id, amount, f"تغییر توسط ادمین (شناسه {uid})")
         info  = users_db.get(target_id, {"name": str(target_id)})
         sign  = "+" if amount >= 0 else ""
         await update.message.reply_text(
@@ -483,42 +580,43 @@ async def handle_admin_media_and_text(update: Update, context: ContextTypes.DEFA
         except Exception: pass
         return
 
-    if reply_to.get(ADMIN_CHAT_ID) == "broadcast":
-        del reply_to[ADMIN_CHAT_ID]
+    if reply_to.get(uid) == "broadcast":
+        if not has_perm(uid, "can_broadcast"): return
+        del reply_to[uid]
         success = 0
         for u_id in users_db:
-            if u_id not in blocked_users:
+            if u_id not in blocked_users and not is_admin(u_id):
                 try:
                     if update.message.text:
-                        await context.bot.send_message(chat_id=u_id, text=f"📢 *پیام همگانی از طرف ارشیا:*\n\n{text}", parse_mode="Markdown")
+                        await context.bot.send_message(chat_id=u_id, text=f"📢 *پیام همگانی از طرف مدیریت:*\n\n{text}", parse_mode="Markdown")
                     else:
-                        await context.bot.send_message(chat_id=u_id, text=f"📢 *پیام رسانه‌ای همگانی از طرف ارشیا:*", parse_mode="Markdown")
-                        await context.bot.copy_message(chat_id=u_id, from_chat_id=ADMIN_CHAT_ID, message_id=update.message.message_id)
+                        await context.bot.send_message(chat_id=u_id, text=f"📢 *پیام رسانه‌ای همگانی از طرف مدیریت:*", parse_mode="Markdown")
+                        await context.bot.copy_message(chat_id=u_id, from_chat_id=uid, message_id=update.message.message_id)
                     success += 1
                 except Exception: pass
         await update.message.reply_text(f"✅ پیام به {success} کاربر ارسال شد."); return
 
-    if ADMIN_CHAT_ID in reply_to:
-        target_id = reply_to.pop(ADMIN_CHAT_ID)
+    if uid in reply_to:
+        if not has_perm(uid, "can_reply"): return
+        target_id = reply_to.pop(uid)
         try:
-            mapped_data = message_map.get(f"reply_{target_id}")
+            # بررسی هوشمند پاسخ با یا بدون ریپلای مستقیم
+            mapped_data = message_map.get(f"reply_{target_id}_{uid}")
             reply_to_user_msg_id = None
             admin_msg_id_in_panel = None
             
             if isinstance(mapped_data, tuple):
                 admin_msg_id_in_panel, reply_to_user_msg_id = mapped_data
-            elif isinstance(mapped_data, int):
-                admin_msg_id_in_panel = mapped_data
 
             await context.bot.copy_message(
                 chat_id=target_id, 
-                from_chat_id=ADMIN_CHAT_ID, 
+                from_chat_id=uid, 
                 message_id=update.message.message_id,
                 reply_to_message_id=reply_to_user_msg_id
             )
             
             if admin_msg_id_in_panel:
-                await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text="✅ پاسخ شما ارسال شد.", reply_to_message_id=admin_msg_id_in_panel)
+                await context.bot.send_message(chat_id=uid, text="✅ پاسخ شما ارسال شد.", reply_to_message_id=admin_msg_id_in_panel)
             else:
                 await update.message.reply_text("✅ پاسخ شما با موفقیت ارسال شد.")
                 
@@ -538,7 +636,7 @@ def main():
     
     app.add_handler(MessageHandler(filters.ALL, handle_admin_media_and_text))
     
-    print("✅ ربات ارشیا روشن شد...")
+    print("✅ ربات ارشیا (نسخه مدیریت هوشمند ادمین‌ها) روشن شد...")
     app.run_polling(allowed_updates=["message", "callback_query", "poll_answer"])
 
 if __name__ == "__main__":
