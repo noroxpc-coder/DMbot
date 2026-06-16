@@ -140,16 +140,9 @@ def admin_panel_keyboard():
     status = "🟢 روشن" if bot_state["active"] else "🔴 خاموش"
     return kb(
         [btn("👥 لیست کاربران", "list_users")],
-        [btn("🚫 لیست بلاک‌شده‌ها", "list_blocked")],
         [btn("📊 آمار", "stats")],
         [btn("📢 پیام همگانی", "broadcast")],
-        [btn("👥 پیام به گروه", "send_group")],
-        [btn("🗳 ساخت نظرسنجی", "create_poll")],
         [btn("💰 مدیریت سکه", "manage_coins")],
-        [btn("🛒 مدیریت اشتراک‌ها", "manage_subs")],
-        [btn("🧾 رسیدهای در انتظار", "pending_receipts_admin")],
-        [btn("💳 تنظیم شماره کارت", "set_card")],
-        [btn("🤖 مدیریت توکن ربات‌سازی", "manage_tokens")],
         [btn(f"⚡ وضعیت ربات: {status}", "toggle_bot")],
     )
 
