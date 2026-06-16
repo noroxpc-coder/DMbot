@@ -25,9 +25,8 @@ bot_state = {"active": True}; user_profiles = {}
 pending_coin_add = {}; pending_note_input = {}
 
 PRIORITY_LEVELS = {
-    "normal": {"label": "🟢 عادی",  "emoji": "🟢", "cost": 0,  "title": "عادی"},
-    "vip":    {"label": "🟡 ویژه",  "emoji": "🟡", "cost": 10, "title": "ویژه"},
-    "urgent": {"label": "🔴 فوری",  "emoji": "🔴", "cost": 30, "title": "فوری"},
+    "normal": {"label": "🟢 عادی",  "emoji": "🟢", "cost": 0,   "title": "عادی"},
+    "urgent": {"label": "🔴 فوری",  "emoji": "🔴", "cost": 100, "title": "فوری"},
 }
 
 # ── توابع کمکی ──────────────────────────────────────────────────────────────
@@ -83,9 +82,8 @@ def mode_selection_keyboard():
 def priority_keyboard(uid):
     return kb(
         [btn("🟢 عادی (رایگان)", "priority_normal")],
-        [btn("🟡 ویژه (۱۰ سکه)", "priority_vip")],
-        [btn("🔴 فوری (۳۰ سکه)", "priority_urgent")],
-        [btn(f"💰 موجودی: {get_coins(uid)} سکه", "noop")],
+        [btn("🔴 فوری (۱۰۰ سکه)", "priority_urgent")],
+        [btn(f"💰 موجودی شما: {get_coins(uid)} سکه", "noop")],
     )
 
 def admin_panel_keyboard():
@@ -98,7 +96,7 @@ def admin_panel_keyboard():
         [btn(f"⚡ وضعیت ربات: {status}", "toggle_bot")],
     )
 
-# ── هندلرهای اصلی ───────────────────────────────────────────────────────────
+# ── هندلرها ───────────────────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user, uid = update.effective_user, update.effective_chat.id
@@ -169,36 +167,61 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["pending_text"] = update.message.text
         context.user_data["pending_msg_id"] = update.message.message_id
         await update.message.reply_text(
-            "📨 پیامت آماده ارسال شد!\n\nبا چه اولویتی ارسال شه?\n\n🟢 *عادی* — رایگان\n🟡 *ویژه* — ۱۰ سکه\n🔴 *فوری* — ۳۰ سکه",
+            "📨 *اولویت ارسال پیام خود را انتخاب کنید:*\n\n"
+            "🟢 *عادی (رایگان):* پیام شما در صف معمولی قرار می‌گیرد و به مرور زمان بررسی می‌شود.\n\n"
+            "🔴 *فوری (۱۰۰ سکه):* پیام شما با وضعیت ویژه و صدای زنگ متمایز 🔔 به دست ارشیا می‌رسد و مستقیماً بالای چتِ ادمین 📌 *سنجاق (Pin)* می‌شود تا در سریع‌ترین زمان ممکن پاسخ داده شود!",
             parse_mode="Markdown", reply_markup=priority_keyboard(uid)); return
 
-    # ارسال مستقیم فایل/مالتی مدیا بدون اولویت متنی
+    # ارسال مستقیم فایل/مالتی مدیا بدون اولویت متنی به صورت عادی
     await send_user_message(context, uid, user, priority="normal", text=None, original_message=update.message, confirm_target=update.message)
 
 
 async def send_user_message(context, uid, user, priority="normal", text=None, original_message=None, confirm_target=None):
     level       = PRIORITY_LEVELS[priority]
-    priority_tag = "\n🟡 *پیام ویژه*" if priority == "vip" else ("\n🔴 *پیام فوری* ⚡️" if priority == "urgent" else "")
-    is_anonymous = user_mode[uid] == "anonymous"
     
+    if priority == "urgent":
+        priority_tag = "\n🚨🚨 *[پیام بسیار فوری — ۱۰۰ سکه]* 🚨🚨\n📌 این پیام در بالای چت شما سنجاق شده است!"
+    else:
+        priority_tag = "\n🟢 *پیام عادی*"
+
+    is_anonymous = user_mode[uid] == "anonymous"
     keyboard     = [[btn("↩️ پاسخ", f"reply_{uid}"), btn("🚫 بلاک", f"block_{uid}")]]
+    
     sender_info  = (
         f"📩 *پیام جدید*{priority_tag}\n🕵️ *ناشناس*\n🔢 Chat ID: `{uid}`\n{'─'*25}"
         if is_anonymous else
         f"📩 *پیام جدید*{priority_tag}\n👤 نام: {user.full_name}\n🆔 یوزرنیم: @{user.username or 'ندارد'}\n🔢 Chat ID: `{uid}`\n{'─'*25}"
     )
-    await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=sender_info, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    # کارهای ویژه برای وضعیت فوری ارشیا
+    if priority == "urgent":
+        # ارسال آلارم چشمی و صوتی جداگانه پیش از پیام اصلی
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID, 
+            text="🔔🔴 *🚨 توجه ارشیا! پیام بسیار فوری با کسر ۱۰۰ سکه دریافت شد! 🚨* 🔴🔔", 
+            parse_mode="Markdown", 
+            disable_notification=False
+        )
+
+    info_msg = await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=sender_info, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
     
     user_orig_msg_id = context.user_data.get("pending_msg_id") if original_message is None else original_message.message_id
 
+    # ارسال یا کپی محتوای پیام
     if text is not None:
-        fwd = await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=text)
+        fwd = await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=text, disable_notification=(priority=="normal"))
     elif is_anonymous:
-        fwd = await context.bot.copy_message(chat_id=ADMIN_CHAT_ID, from_chat_id=uid, message_id=original_message.message_id)
+        fwd = await context.bot.copy_message(chat_id=ADMIN_CHAT_ID, from_chat_id=uid, message_id=original_message.message_id, disable_notification=(priority=="normal"))
     else:
-        fwd = await original_message.forward(chat_id=ADMIN_CHAT_ID)
+        fwd = await original_message.forward(chat_id=ADMIN_CHAT_ID, disable_notification=(priority=="normal"))
     
-    # ساخت ساختار تاپل برای ذخیره شناسه پیام ادمین و شناسه واقعی پیام کاربر
+    # سنجاق کردن خودکار پیام متنی یا رسانه ادمین در چت در صورت فوری بودن
+    if priority == "urgent":
+        try:
+            await context.bot.pin_chat_message(chat_id=ADMIN_CHAT_ID, message_id=fwd.message_id, disable_notification=False)
+        except Exception:
+            pass
+
     message_map[f"reply_{uid}"] = (fwd.message_id, user_orig_msg_id)
     
     if level["cost"] > 0: 
@@ -207,8 +230,8 @@ async def send_user_message(context, uid, user, priority="normal", text=None, or
         new_coins = add_coins(uid, 1, "پاداش ارسال پیام به ارشیا")
         
     confirm_text = f"✅ پیامت دریافت شد، به زودی از ارشیا جواب میگیری.\n🎁 *۱ سکه پاداش گرفتی!*\n💰 موجودی فعلی: {new_coins} سکه"
-    if priority == "vip":    confirm_text = f"✅ پیام *ویژه*‌ت ارسال شد! 🟡 سریع‌تر بررسی میشه.\n💰 موجودی فعلی: {new_coins} سکه"
-    elif priority == "urgent": confirm_text = f"✅ پیام *فوری*‌ت ارسال شد! 🔴 در صدر لیست قرار گرفت.\n💰 موجودی فعلی: {new_coins} سکه"
+    if priority == "urgent": 
+        confirm_text = f"🔴 *پیام فوری شما با موفقیت ارسال شد!*\n📌 پیام شما با کسر ۱۰۰ سکه، در بالای چت ارشیا سنجاق شد تا سریعاً بررسی شود.\n💰 موجودی فعلی: {new_coins} سکه"
     if is_anonymous: confirm_text += " 🕵️"
     
     if confirm_target:
@@ -282,7 +305,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if quid == ADMIN_CHAT_ID: return
         if not bot_state["active"]:
             await query.edit_message_text("⚠️ ربات در حال حاضر غیرفعال است."); return
-        await query.edit_message_text("📨 *ارسال پیام به ارشیا*\n\nپیامت رو بنویس و ارسال کن 👇\n\n(متن، عکس، فایل — همه پذیرفته میشه و با هر پیام ۱ سکه جایزه می‌گیری!)", parse_mode="Markdown"); return
+        await query.edit_message_text("📨 *ارسال پیام به ارشیا*\n\nپیامت رو بنویس و ارسال کن 👇\n\n(با هر پیام عادی ۱ سکه جایزه می‌گیری!)", parse_mode="Markdown"); return
 
     if data == "open_settings":
         if quid == ADMIN_CHAT_ID: return
@@ -300,13 +323,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📋 *آخرین تراکنش‌های سکه:*\n{history_text}",
             parse_mode="Markdown", reply_markup=kb([back_btn("back_main")])); return
 
-    if data in ("priority_normal", "priority_vip", "priority_urgent"):
+    if data in ("priority_normal", "priority_urgent"):
         if quid == ADMIN_CHAT_ID: return
         priority = data.split("_")[1]
         level    = PRIORITY_LEVELS[priority]
         coins    = get_coins(quid)
         if level["cost"] > coins:
-            await query.answer(f"❌ سکه کافی نداری! ({coins}/{level['cost']})", show_alert=True); return
+            await query.answer(f"❌ سکه کافی نداری! برای ارسال فوری به ۱۰۰ سکه نیاز داری. ({coins}/{level['cost']})", show_alert=True); return
         pending_text = context.user_data.get("pending_text")
         if not pending_text:
             await query.edit_message_text("⚠️ پیام منقضی شده، لطفاً دوباره ارسال کن."); return
@@ -487,7 +510,6 @@ async def handle_admin_media_and_text(update: Update, context: ContextTypes.DEFA
             elif isinstance(mapped_data, int):
                 admin_msg_id_in_panel = mapped_data
 
-            # کپی تمیز پیام ارشیا به چت کاربر به همراه قابلیت ریپلای روی آیدی پیام ثبت شده کاربر
             await context.bot.copy_message(
                 chat_id=target_id, 
                 from_chat_id=ADMIN_CHAT_ID, 
@@ -495,7 +517,6 @@ async def handle_admin_media_and_text(update: Update, context: ContextTypes.DEFA
                 reply_to_message_id=reply_to_user_msg_id
             )
             
-            # ارسال تاییدیه روی چت خودتان (ریپلای روی پیامی که توی پنل اومده بود)
             if admin_msg_id_in_panel:
                 await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text="✅ پاسخ شما ارسال شد.", reply_to_message_id=admin_msg_id_in_panel)
             else:
