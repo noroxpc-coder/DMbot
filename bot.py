@@ -24,11 +24,12 @@ pending_poll = {}; poll_votes = {}
 bot_state = {"active": True}; user_profiles = {}
 pending_coin_add = {}; pending_note_input = {}; pending_admin_add = {}
 
-# دیتابیس ادمین‌ها و دسترسی‌ها
-# ساختار: { admin_id: { "name": str, "permissions": set([...]) } }
-admins_db = {}
+# بخش‌های جدید برای مدیریت درخواست‌های آنبلاک
+unblock_requests = {}      # ساختار: { user_id: "متن درخواست" }
+used_unblock_ticket = set() # کاربرانی که قبلاً یک‌بار درخواست داده‌اند
+pending_unblock_text = {}   # وضعیت انتظار برای تایپ متن درخواست
 
-# لیست کل دسترسی‌های قابل تنظیم
+admins_db = {}
 ALL_PERMISSIONS = {
     "can_reply": "✉️ پاسخ به پیام‌ها",
     "can_manage_coins": "💰 مدیریت سکه",
@@ -44,12 +45,10 @@ PRIORITY_LEVELS = {
 # ── توابع کمکی دسترسی ────────────────────────────────────────────────────────
 
 def is_admin(uid):
-    """بررسی اینکه آیا کاربر ادمین اصلی یا فرعی است"""
     return uid == OWNER_CHAT_ID or uid in admins_db
 
 def has_perm(uid, permission):
-    """بررسی هوشمند دسترسی ادمین‌ها"""
-    if uid == OWNER_CHAT_ID: return True  # مالک اصلی همه دسترسی‌ها را دارد
+    if uid == OWNER_CHAT_ID: return True
     if uid in admins_db:
         return permission in admins_db[uid]["permissions"]
     return False
@@ -111,9 +110,11 @@ def priority_keyboard(uid):
 
 def admin_panel_keyboard(uid):
     buttons = []
-    # منوهای پویا بر اساس سطح دسترسی ادمین فرعی یا ارشد
     if has_perm(uid, "can_manage_users"):
-        buttons.append([btn("👥 لیست کاربران", "list_users")])
+        # اضافه شدن دکمه مدیریت درخواست‌های آنبلاک با نمایش تعداد کل درخواست‌ها
+        req_count = len(unblock_requests)
+        req_label = f"📩 درخواست‌های رفع بلاک ({req_count})" if req_count > 0 else "📩 درخواست‌های رفع بلاک"
+        buttons.append([btn("👥 لیست کاربران", "list_users"), btn(req_label, "manage_unblock_reqs")])
     
     mid_row = []
     if has_perm(uid, "can_manage_users"): mid_row.append(btn("📊 آمار", "stats"))
@@ -123,7 +124,6 @@ def admin_panel_keyboard(uid):
     if has_perm(uid, "can_manage_coins"):
         buttons.append([btn("💰 مدیریت سکه", "manage_coins")])
         
-    # بخش‌های کاملاً قفل شده و مخصوص مالک اصلی (ارشیا)
     if uid == OWNER_CHAT_ID:
         status = "🟢 روشن" if bot_state["active"] else "🔴 خاموش"
         buttons.append([btn("👑 مدیریت ادمین‌ها و دسترسی‌ها", "manage_admins")])
@@ -132,15 +132,12 @@ def admin_panel_keyboard(uid):
     return InlineKeyboardMarkup(buttons)
 
 def admin_permissions_keyboard(admin_id):
-    """ساخت کیبورد هوشمند برای فعال/غیرفعال کردن تک تک دسترسی‌ها"""
     admin_info = admins_db.get(admin_id, {"permissions": set()})
     current_perms = admin_info["permissions"]
-    
     rows = []
     for perm_key, perm_label in ALL_PERMISSIONS.items():
         status_emoji = "✅" if perm_key in current_perms else "❌"
         rows.append([btn(f"{status_emoji} {perm_label}", f"toggleperm_{admin_id}_{perm_key}")])
-        
     rows.append([btn("🗑 حذف کامل این ادمین", f"removeadmin_{admin_id}")])
     rows.append([back_btn("manage_admins")])
     return InlineKeyboardMarkup(rows)
@@ -152,8 +149,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private": return
     if is_admin(uid):
         await panel(update, context); return
+        
+    # هوش برخورد با کاربر بلاک شده
+    if uid in blocked_users:
+        if uid in used_unblock_ticket:
+            await update.message.reply_text("⛔ *شما مسدود شده‌اید.*\n\n⚠️ شما قبلاً یک‌بار درخواست رفع بلاک ارسال کرده‌اید و دیگر امکان ارسال درخواست مجدد را ندارید.", parse_mode="Markdown")
+        else:
+            await update.message.reply_text(
+                "⛔ *شما از دسترسی به ربات مسدود شده‌اید.*\n\n"
+                "💡 اما سیستم به شما اجازه می‌دهد **فقط یک‌بار** درخواست توجیهی یا عذرخواهی خود را برای ارشیا بفرستید تا بررسی شود.",
+                parse_mode="Markdown",
+                reply_markup=kb([btn("✍️ ثبت درخواست رفع بلاک", "write_unblock_request")])
+            )
+        return
+
     if not bot_state["active"]:
         await update.message.reply_text("⛔ *ربات در حال حاضر غیرفعال است.*\n\nلطفاً بعداً مراجعه کنید.", parse_mode="Markdown"); return
+        
     users_db[uid] = {"name": user.full_name, "username": user.username or "ندارد", "chat_id": uid}
     ensure_profile(uid); update_last_seen(uid)
     if uid not in user_mode:
@@ -203,9 +215,10 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user, uid = update.effective_user, update.effective_chat.id
     if update.effective_chat.type != "private" or is_admin(uid): return
     if uid in blocked_users:
-        await update.message.reply_text("⛔ شما مسدود شده‌اید."); return
+        return # هندل کامل در استارت انجام می‌شود و پیام معمولی رد نمی‌شود.
+
     if not bot_state["active"]:
-        await update.message.reply_text("⛔ *ربات در حال حاضر غیرفعال است.*\n\nلطفاً بعداً مراجعه کنید.", parse_mode="Markdown"); return
+        await update.message.reply_text("⛔ *ربات در حال حاضر غیرفعال است.*", parse_mode="Markdown"); return
     update_last_seen(uid)
 
     if uid not in user_mode:
@@ -243,7 +256,6 @@ async def send_user_message(context, uid, user, priority="normal", text=None, or
         f"📩 *پیام جدید*{priority_tag}\n👤 نام: {user.full_name}\n🆔 یوزرنیم: @{user.username or 'ندارد'}\n🔢 Chat ID: `{uid}`\n{'─'*25}"
     )
     
-    # ارسال آلارم و پیام به ارشیا (مالک) و تمام ادمین‌هایی که دسترسی پاسخگویی دارند
     targets = [OWNER_CHAT_ID] + [adm_id for adm_id, adm_info in admins_db.items() if "can_reply" in adm_info["permissions"]]
 
     for target_admin in targets:
@@ -271,10 +283,8 @@ async def send_user_message(context, uid, user, priority="normal", text=None, or
                     await context.bot.pin_chat_message(chat_id=target_admin, message_id=fwd.message_id, disable_notification=False)
                 except Exception: pass
 
-            # ذخیره کردن نگاشت فقط برای ادمینی که پیام را دریافت کرده
             message_map[f"reply_{uid}_{target_admin}"] = (fwd.message_id, user_orig_msg_id)
-        except Exception:
-            pass
+        except Exception: pass
     
     if level["cost"] > 0: 
         new_coins = add_coins(uid, -level["cost"], f"ارسال پیام با اولویت {level['title']}")
@@ -299,6 +309,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "noop": return
 
     quid = query.from_user.id
+
+    # دکمه ورود کاربر بلاک شده به فاز تایپ درخواست رفع بلاک
+    if data == "write_unblock_request":
+        if quid in used_unblock_ticket:
+            await query.edit_message_text("❌ خطا! شما قبلاً شانس خود را امتحان کرده‌اید."); return
+        pending_unblock_text[quid] = True
+        await query.edit_message_text("✍️ لطفاً دلیل خود را برای رفع مسدودی در قالب **یک پیام متنی** بنویسید و ارسال کنید:\n\n⚠️ توجه: به محض ارسال، پیام شما نهایی شده و فرصت دیگری ندارید.", parse_mode="Markdown"); return
 
     if data in ("set_mode_normal", "set_mode_anonymous"):
         if is_admin(quid): return
@@ -392,6 +409,45 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([back_btn()])
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)); return
 
+    # 📥 مدیریت هوشمند درخواست‌های آنبلاک در پنل ادمین
+    if data == "manage_unblock_reqs":
+        if not has_perm(uid, "can_manage_users"):
+            await query.answer("❌ عدم دسترسی", show_alert=True); return
+        if not unblock_requests:
+            await query.edit_message_text("📥 *هیچ درخواست جدیدی برای رفع بلاک ثبت نشده است.*", parse_mode="Markdown", reply_markup=kb([back_btn()])); return
+        
+        text = "📥 *لیست درخواست‌های رفع مسدودی کاربران:*\n━━━━━━━━━━━━━━━━━━\n"
+        keyboard = []
+        for target_id, req_msg in list(unblock_requests.items()):
+            info = users_db.get(target_id, {"name": "ناشناس", "username": "ندارد"})
+            text += f"👤 کاربر: *{info['name']}* (`{target_id}`)\n📝 متن درخواست: _{req_msg}_\n━━━━━━━━━━━━━━━━━━\n"
+            keyboard.append([
+                btn(f"✅ آنبلاک {info['name']}", f"adm_accept_unblock_{target_id}"),
+                btn(f"❌ رد درخواست", f"adm_reject_unblock_{target_id}")
+            ])
+        keyboard.append([back_btn()])
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)); return
+
+    if data.startswith("adm_accept_unblock_"):
+        target_id = int(data.split("_")[3])
+        blocked_users.discard(target_id)
+        unblock_requests.pop(target_id, None)
+        ensure_profile(target_id).setdefault("block_history", []).append(f"✅ آنبلاک شد (تایید درخواست) — {fmt_dt()}")
+        await query.message.reply_text(f"✅ کاربر مسدود شده با موفقیت آنبلاک شد."); 
+        try:
+            await context.bot.send_message(chat_id=target_id, text="🎉 *درخواست رفع مسدودی شما توسط مدیریت تایید شد!*\n\nاکنون می‌توانید با ارسال دستور /start مجدداً از ربات استفاده کنید.", parse_mode="Markdown")
+        except Exception: pass
+        return
+
+    if data.startswith("adm_reject_unblock_"):
+        target_id = int(data.split("_")[3])
+        unblock_requests.pop(target_id, None)
+        await query.message.reply_text(f"❌ درخواست کاربر رد شد. (کاربر کماکان مسدود می‌ماند)"); 
+        try:
+            await context.bot.send_message(chat_id=target_id, text="❌ *درخواست رفع مسدودی شما پس از بررسی توسط مدیریت رد شد.*", parse_mode="Markdown")
+        except Exception: pass
+        return
+
     if data == "stats":
         if not has_perm(uid, "can_manage_users"):
             await query.answer("❌ عدم دسترسی", show_alert=True); return
@@ -461,7 +517,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📝 *یادداشت برای {info['name']}*\n\nیادداشت فعلی: {current_note}\n\nیادداشت جدید رو بنویس (یا بفرست 'حذف' تا پاک بشه):",
             parse_mode="Markdown"); return
 
-    # 👑 بخش‌های اختصاصی ارشیا (مدیریت ادمین‌ها)
     if uid != OWNER_CHAT_ID: return
 
     if data == "toggle_bot":
@@ -473,7 +528,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "manage_admins":
         text = "👑 *بخش هوشمند مدیریت ادمین‌ها و دسترسی‌ها*\n\n"
         keyboard = [[btn("➕ افزودن ادمین جدید", "add_new_admin")]]
-        
         if not admins_db:
             text += "⚠️ در حال حاضر هیچ ادمین فرعی تعریف نشده است."
         else:
@@ -481,13 +535,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for adm_id, adm_info in admins_db.items():
                 text += f"• 👤 {adm_info['name']} (`{adm_id}`) — دارای {len(adm_info['permissions'])} دسترسی\n"
                 keyboard.append([btn(f"⚙️ تنظیم دسترسی {adm_info['name']}", f"editadmin_{adm_id}")])
-                
         keyboard.append([back_btn()])
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)); return
 
     if data == "add_new_admin":
         pending_admin_add[OWNER_CHAT_ID] = True
-        await query.message.reply_text("👑 *افزودن ادمین فرعی هوشمند*\n\nلطفاً **Chat ID** یا شناسه عددی کاربر مورد نظر را ارسال کنید تا فرآیند تنظیم دسترسی آغاز شود:\n\n💡 برای انصراف دستور /cancel را بفرستید.", parse_mode="Markdown"); return
+        await query.message.reply_text("👑 *افزودن ادمین فرعی*\n\nلطفاً **Chat ID** عددی کاربر مورد نظر را ارسال کنید:", parse_mode="Markdown"); return
 
     if data.startswith("editadmin_"):
         admin_id = int(data.split("_")[1])
@@ -508,45 +561,52 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("removeadmin_"):
         admin_id = int(data.split("_")[1])
         name = admins_db.pop(admin_id, {}).get("name", "ادمین")
-        await query.message.reply_text(f"🗑 ادمین فرعی *{name}* با موفقیت حذف شد و تمام دسترسی‌هایش گرفته شد.", parse_mode="Markdown")
-        # رفرش منو
-        reply_to[OWNER_CHAT_ID] = "refresh" # ترفند کوچک برای بازگشت به منو
-        await query.message.reply_text("برای دیدن لیست بروز شده روی /panel کلیک کنید."); return
+        await query.message.reply_text(f"🗑 ادمین فرعی *{name}* حذف شد.")
+        return
 
 
-# ── هندلر جامع پیام‌های ادمین‌ها و کاربران ──────────────────────────
+# ── هندلر جامع پیام‌ها ──────────────────────────────────────────────────────
 
 async def handle_admin_media_and_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_chat.id
     if update.effective_chat.type != "private": return
     
+    text = update.message.text or ""
+
+    # منطق دریافت درخواست رفع بلاک کاربر مسدود شده
+    if uid in blocked_users:
+        if pending_unblock_text.get(uid):
+            if not update.message.text:
+                await update.message.reply_text("❌ درخواست رفع بلاک حتماً باید به صورت پیام متنی ارسال شود."); return
+            
+            pending_unblock_text.pop(uid, None)
+            used_unblock_ticket.add(uid)  # سوزاندن بلیت شانس کاربر
+            unblock_requests[uid] = text.strip() # ثبت درخواست
+            
+            await update.message.reply_text("✅ *درخواست شما با موفقیت ثبت شد و در صف بررسی قرار گرفت.*\n\nنتیجه آن به محض بررسی توسط ارشیا از همین طریق به شما اعلام خواهد شد.", parse_mode="Markdown")
+            
+            # اطلاع‌رسانی سریع به ادمین‌های مربوطه
+            targets = [OWNER_CHAT_ID] + [adm_id for adm_id, adm_info in admins_db.items() if "can_manage_users" in adm_info["permissions"]]
+            for admin_id in targets:
+                try:
+                    await context.bot.send_message(chat_id=admin_id, text=f"📥 *یک درخواست رفع مسدودی جدید ثبت شد!*\nبرای بررسی به پنل مدیریت بخش درخواست‌های رفع بلاک مراجعه کنید.")
+                except Exception: pass
+        return
+
     if not is_admin(uid):
         await forward_message(update, context); return
 
-    text = update.message.text or ""
-    
     if text.strip() in ("انصراف", "/cancel"):
-        await cancel_command(update, context)
-        return
+        await cancel_command(update, context); return
 
-    # هوش منطقی اضافه کردن ادمین فرعی جدید توسط ارشیا
     if uid == OWNER_CHAT_ID and pending_admin_add.get(OWNER_CHAT_ID):
         pending_admin_add.pop(OWNER_CHAT_ID)
-        try:
-            target_admin_id = int(text.strip())
+        try: target_admin_id = int(text.strip())
         except ValueError:
-            await update.message.reply_text("❌ خطا! شناسه ادمین حتماً باید یک عدد چند رقمی (Chat ID) باشد. فرآیند لغو شد."); return
-            
+            await update.message.reply_text("❌ خطا! شناسه ادمین باید عدد باشد."); return
         user_info = users_db.get(target_admin_id, {"name": f"کاربر {target_admin_id}"})
-        admins_db[target_admin_id] = {
-            "name": user_info["name"],
-            "permissions": set(["can_reply"]) # به طور پیش‌فرض فقط دسترسی پاسخگویی دارد
-        }
-        await update.message.reply_text(
-            f"✅ ادمین جدید با موفقیت به سیستم اضافه شد!\n\n👤 نام: {user_info['name']}\n🔢 شناسه: `{target_admin_id}`\n\n"
-            f"حالا می‌تونی دسترسی‌هاشو تغییر بدی 👇",
-            parse_mode="Markdown", reply_markup=admin_permissions_keyboard(target_admin_id))
-        return
+        admins_db[target_admin_id] = {"name": user_info["name"], "permissions": set(["can_reply"])}
+        await update.message.reply_text(f"✅ ادمین اضافه شد.", reply_markup=admin_permissions_keyboard(target_admin_id)); return
 
     if pending_note_input.get(uid):
         if not has_perm(uid, "can_manage_users"): return
@@ -557,26 +617,19 @@ async def handle_admin_media_and_text(update: Update, context: ContextTypes.DEFA
             await update.message.reply_text("🗑 یادداشت حذف شد.")
         else:
             p["admin_note"] = text.strip()
-            await update.message.reply_text(f"📝 یادداشت ذخیره شد:\n{text.strip()}")
+            await update.message.reply_text(f"📝 یادداشت ذخیره شد.")
         return
 
     if pending_coin_add.get(uid):
         if not has_perm(uid, "can_manage_coins"): return
         target_id = pending_coin_add.pop(uid)
-        try:
-            amount = int(text.strip())
+        try: amount = int(text.strip())
         except ValueError:
-            await update.message.reply_text("❌ فقط عدد بفرست (مثلاً 20 یا -10)."); return
-        new_balance = add_coins(target_id, amount, f"تغییر توسط ادمین (شناسه {uid})")
-        info  = users_db.get(target_id, {"name": str(target_id)})
-        sign  = "+" if amount >= 0 else ""
-        await update.message.reply_text(
-            f"✅ موجودی *{info['name']}* بروز شد.\nتغییر: {sign}{amount} سکه\nموجودی جدید: 💰 {new_balance}",
-            parse_mode="Markdown")
+            await update.message.reply_text("❌ فقط عدد بفرستید."); return
+        new_balance = add_coins(target_id, amount, f"تغییر توسط ادمین")
+        await update.message.reply_text(f"✅ موجودی بروز شد. موجودی جدید: {new_balance}")
         try:
-            await context.bot.send_message(chat_id=target_id,
-                text=f"💰 *موجودی سکه‌ات تغییر کرد!*\n\n{'➕' if amount>=0 else '➖'} {abs(amount)} سکه\nموجودی جدید: {new_balance} سکه",
-                parse_mode="Markdown")
+            await context.bot.send_message(chat_id=target_id, text=f"💰 موجودی جدید سکه‌های شما: {new_balance}")
         except Exception: pass
         return
 
@@ -600,11 +653,9 @@ async def handle_admin_media_and_text(update: Update, context: ContextTypes.DEFA
         if not has_perm(uid, "can_reply"): return
         target_id = reply_to.pop(uid)
         try:
-            # بررسی هوشمند پاسخ با یا بدون ریپلای مستقیم
             mapped_data = message_map.get(f"reply_{target_id}_{uid}")
             reply_to_user_msg_id = None
             admin_msg_id_in_panel = None
-            
             if isinstance(mapped_data, tuple):
                 admin_msg_id_in_panel, reply_to_user_msg_id = mapped_data
 
@@ -614,12 +665,10 @@ async def handle_admin_media_and_text(update: Update, context: ContextTypes.DEFA
                 message_id=update.message.message_id,
                 reply_to_message_id=reply_to_user_msg_id
             )
-            
             if admin_msg_id_in_panel:
                 await context.bot.send_message(chat_id=uid, text="✅ پاسخ شما ارسال شد.", reply_to_message_id=admin_msg_id_in_panel)
             else:
                 await update.message.reply_text("✅ پاسخ شما با موفقیت ارسال شد.")
-                
         except Exception as e:
             await update.message.reply_text(f"❌ ارسال پاسخ ناموفق بود.\nخطا: {e}")
 
@@ -633,10 +682,9 @@ def main():
     app.add_handler(CommandHandler("cancel",   cancel_command))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(PollAnswerHandler(handle_poll_answer))
-    
     app.add_handler(MessageHandler(filters.ALL, handle_admin_media_and_text))
     
-    print("✅ ربات ارشیا (نسخه مدیریت هوشمند ادمین‌ها) روشن شد...")
+    print("✅ ربات ارشیا (به همراه منوی درخواست آنبلاک یکبارمصرف) روشن شد...")
     app.run_polling(allowed_updates=["message", "callback_query", "poll_answer"])
 
 if __name__ == "__main__":
