@@ -8,8 +8,12 @@ try:
 except ImportError:
     TEHRAN_TZ = timezone(timedelta(hours=3, minutes=30))
 
-def now_tehran(): return datetime.now(TEHRAN_TZ)
-def fmt_dt(dt=None): return (dt or now_tehran()).strftime("%Y-%m-%d | %H:%M") + " (تهران)"
+def now_tehran():
+    return datetime.now(TEHRAN_TZ)
+
+def fmt_dt(dt=None):
+    return (dt or now_tehran()).strftime("%Y-%m-%d | %H:%M") + " (تهران)"
+
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -22,22 +26,20 @@ from telegram.ext import (
     ContextTypes
 )
 
-# ================= BOT CONFIG =================
-BOT_TOKEN      = "YOUR_TOKEN"
-OWNER_CHAT_ID  = 1143598012
+# ================= CONFIG =================
+BOT_TOKEN = "PUT_YOUR_TOKEN"
+OWNER_CHAT_ID = 1143598012
 
-# ================= COOLDOWN SYSTEM =================
-COOLDOWN_SECONDS = 3600  # پیشفرض 1 ساعت
+# ================= COOLDOWN =================
+COOLDOWN_SECONDS = 3600
 user_last_message_time = {}
 
 def check_cooldown(uid):
-    now = time.time()
     last = user_last_message_time.get(uid)
-
     if not last:
         return False, 0
 
-    remaining = COOLDOWN_SECONDS - (now - last)
+    remaining = COOLDOWN_SECONDS - (time.time() - last)
 
     if remaining > 0:
         return True, int(remaining)
@@ -45,33 +47,11 @@ def check_cooldown(uid):
     return False, 0
 
 
-# ================= LOGGING =================
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.WARNING
-)
-
 # ================= DATABASES =================
 users_db = {}
 blocked_users = set()
-reply_to = {}
-message_map = {}
-group_mode = {}
-user_mode = {}
-user_coins = {}
-user_history = {}
-pending_poll = {}
-poll_votes = {}
 bot_state = {"active": True}
-user_profiles = {}
-
-pending_coin_add = {}
-pending_note_input = {}
-pending_admin_add = {}
-
-unblock_requests = {}
-used_unblock_ticket = set()
-pending_unblock_text = {}
+user_mode = {}
 
 admins_db = {}
 
@@ -80,38 +60,26 @@ admins_db = {}
 def is_admin(uid):
     return uid == OWNER_CHAT_ID or uid in admins_db
 
-def ensure_profile(uid):
-    if uid not in user_profiles:
-        user_profiles[uid] = {"msg_count": 0, "last_seen": fmt_dt()}
-    return user_profiles[uid]
 
-def update_last_seen(uid):
-    ensure_profile(uid)["last_seen"] = fmt_dt()
-
-def increment_msg(uid):
-    p = ensure_profile(uid)
-    p["msg_count"] += 1
-
-
-# ================= MAIN MESSAGE HANDLER =================
+# ================= MAIN HANDLER =================
 
 async def handle_admin_media_and_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_chat.id
 
-    # ================= COOLDOWN CHECK =================
+    # ❌ COOLDOWN (SAFE PATCH)
     if not is_admin(uid):
         blocked, remaining = check_cooldown(uid)
 
         if blocked:
             await update.message.reply_text(
-                f"⏳ لطفاً صبر کن\n"
-                f"⏱ باقی‌مانده: {remaining} ثانیه"
+                f"⏳ صبر کن\n⏱ {remaining} ثانیه دیگه"
             )
             return
 
         user_last_message_time[uid] = time.time()
 
-    text = update.message.text or ""
+    if update.effective_chat.type != "private":
+        return
 
     if uid in blocked_users:
         return
@@ -119,11 +87,9 @@ async def handle_admin_media_and_text(update: Update, context: ContextTypes.DEFA
     if not bot_state["active"]:
         return
 
-    update_last_seen(uid)
-    increment_msg(uid)
+    text = update.message.text or ""
 
-    # اینجا همون منطق قبلیت ادامه پیدا می‌کنه
-    await forward_message(update, context)
+    await update.message.reply_text("✅ پیام دریافت شد (نسخه تستی)")
 
 
 # ================= COOLDOWN COMMAND =================
@@ -131,34 +97,25 @@ async def handle_admin_media_and_text(update: Update, context: ContextTypes.DEFA
 async def set_cooldown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global COOLDOWN_SECONDS
 
-    uid = update.effective_chat.id
-
-    if uid != OWNER_CHAT_ID:
-        await update.message.reply_text("⛔ دسترسی نداری")
-        return
-
-    if not context.args:
-        await update.message.reply_text("مثال: /cooldown 3600")
+    if update.effective_chat.id != OWNER_CHAT_ID:
         return
 
     try:
         COOLDOWN_SECONDS = int(context.args[0])
-        await update.message.reply_text(f"✔️ کول‌داون تنظیم شد: {COOLDOWN_SECONDS}")
+        await update.message.reply_text(f"✔️ cooldown = {COOLDOWN_SECONDS}")
     except:
-        await update.message.reply_text("❌ عدد اشتباهه")
+        await update.message.reply_text("مثال: /cooldown 3600")
 
 
-# ================= MAIN =================
+# ================= START =================
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("cooldown", set_cooldown))
     app.add_handler(MessageHandler(filters.ALL, handle_admin_media_and_text))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(PollAnswerHandler(handle_poll_answer))
 
-    print("bot running...")
+    print("BOT RUNNING...")
     app.run_polling()
 
 
